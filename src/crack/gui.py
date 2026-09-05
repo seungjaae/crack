@@ -285,8 +285,11 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(
             self, "정사영상 열기", "", "GeoTIFF (*.tif *.tiff);;모든 파일 (*)"
         )
-        if not path:
-            return
+        if path:
+            self.load_image(path)
+
+    def load_image(self, path: str | Path) -> None:
+        path = str(path)
         try:
             self.raster = open_raster(path, self.cfg.fallback_gsd_mm)
             self.preview_rgb, self.preview_scale = read_overview(
@@ -441,12 +444,18 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
     cfg_path = None
     if "--config" in argv:
-        cfg_path = Path(argv[argv.index("--config") + 1])
+        i = argv.index("--config")
+        cfg_path = Path(argv[i + 1])
+        del argv[i : i + 2]
+
+    image = next((a for a in argv[1:] if not a.startswith("-")), None)
 
     cfg = config_mod.load(cfg_path)
     app = QApplication(argv[:1])
     win = MainWindow(cfg, cfg_path)
     win.show()
+    if image:
+        win.load_image(image)
     return app.exec()
 
 
