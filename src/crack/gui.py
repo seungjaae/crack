@@ -46,6 +46,10 @@ from .raster import Raster, open_raster, read_overview
 
 PREVIEW_MAX_PX = 1600
 
+# 선을 고를 때 허용하는 클릭 오차 (미리보기 픽셀).
+# 균열선은 화면에서 2px 남짓으로 가늘기 때문에 넉넉히 잡아야 집힌다.
+CLICK_RADIUS_PX = 22.0
+
 OVERLAY_RGB = {
     "red": (255, 70, 60),
     "yellow": (255, 214, 40),
@@ -137,13 +141,27 @@ class ColorControls(QWidget):
 
 
 class ClickableLabel(QLabel):
-    """캔버스. 픽스맵을 원래 크기로 그리므로 클릭 좌표 = 미리보기 픽셀 좌표."""
+    """캔버스. 클릭 위치를 미리보기 픽셀 좌표로 바꿔서 알린다."""
 
     clicked = Signal(int, int)
 
     def mousePressEvent(self, ev) -> None:  # noqa: N802 - Qt 규약
+        pm = self.pixmap()
+        if pm is None or pm.isNull():
+            return
+
+        # 이미지는 라벨 안에서 가운데 정렬된다. 그 여백을 빼야 좌표가 맞는다.
+        # 이미지가 라벨보다 크면 여백은 음수가 된다 (위아래가 잘려 나간 만큼).
+        # 여기서 0 으로 깎으면 잘린 높이의 절반만큼 클릭이 통째로 어긋난다.
+        dpr = pm.devicePixelRatio() or 1.0
+        pw, ph = pm.width() / dpr, pm.height() / dpr
+        off_x = (self.width() - pw) / 2.0
+        off_y = (self.height() - ph) / 2.0
+
         pos = ev.position()
-        self.clicked.emit(int(pos.x()), int(pos.y()))
+        x, y = pos.x() - off_x, pos.y() - off_y
+        if 0.0 <= x < pw and 0.0 <= y < ph:      # 이미지 바깥 클릭은 무시
+            self.clicked.emit(int(x), int(y))
 
 
 def _point_to_polyline_px(pt: np.ndarray, poly: np.ndarray) -> float:
@@ -448,11 +466,16 @@ class MainWindow(QMainWindow):
                 best, best_d = s, d
 
         # 너무 멀리 찍으면 선택 해제
-        self.selected = best.id if (best is not None and best_d <= 12.0) else None
+        self.selected = best.id if (best is not None and best_d <= CLICK_RADIUS_PX) else None
         if self.selected is not None and best is not None:
             self.sel_label.setText(
                 f"선택: #{best.id}  {best.grade_id}·{best.color}  "
                 f"길이 {best.length_mm:,.1f} mm"
+            )
+        elif best is not None:
+            self.sel_label.setText(
+                f"가까운 선이 없습니다 (가장 가까운 선까지 {best_d:.0f}px). "
+                "선 위를 눌러 주세요."
             )
         else:
             self.sel_label.setText("선을 클릭해 선택하세요")
@@ -619,8 +642,11 @@ class MainWindow(QMainWindow):
             img = self._mask_overlay()
         else:
             img = self._result_overlay()
-        self.canvas.setPixmap(to_pixmap(img))
-        self.canvas.resize(self.canvas.pixmap().size())
+        pm = to_pixmap(img)
+        self.canvas.setPixmap(pm)
+        # 라벨이 이미지보다 작으면 위아래가 잘린 채 스크롤도 안 된다.
+        # 최소 크기를 이미지에 맞춰 두면 스크롤 영역이 스크롤바를 내준다.
+        self.canvas.setMinimumSize(pm.size())
 
     def _mask_overlay(self) -> np.ndarray:
         """축소본 위에서 현재 임계값의 색상 검출 결과를 즉시 보여준다."""

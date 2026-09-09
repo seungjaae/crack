@@ -104,3 +104,104 @@ def test_zero_length_segment_does_not_divide_by_zero():
     poly = np.array([[2.0, 2.0], [2.0, 2.0]])
     d = _point_to_polyline_px(np.array([2.0, 5.0]), poly)
     assert np.isfinite(d) and d == pytest.approx(3.0)
+
+
+# ------------------------------------------- 실제 마우스 이벤트로 좌표 검증
+@pytest.fixture(scope="session")
+def qapp():
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
+
+
+def _label_with_pixmap(w: int, h: int, label_w: int, label_h: int):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPixmap
+
+    from crack.gui import ClickableLabel
+
+    lbl = ClickableLabel(alignment=Qt.AlignCenter)
+    pm = QPixmap(w, h)
+    pm.fill()
+    lbl.setPixmap(pm)
+    lbl.resize(label_w, label_h)
+    got: list[tuple[int, int]] = []
+    lbl.clicked.connect(lambda x, y: got.append((x, y)))
+    return lbl, got
+
+
+def test_click_maps_through_centering_offset(qapp):
+    """라벨이 이미지보다 크면 이미지가 가운데 정렬된다.
+
+    그 여백을 빼지 않으면 클릭 좌표가 통째로 어긋나 선이 안 잡힌다.
+    """
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    lbl, got = _label_with_pixmap(100, 80, 300, 200)
+    # 이미지 좌상단은 라벨 기준 ((300-100)/2, (200-80)/2) = (100, 60)
+    QTest.mouseClick(lbl, Qt.LeftButton, pos=QPoint(110, 80))
+    assert got == [(10, 20)]
+
+
+def test_click_is_exact_when_label_matches_image(qapp):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    lbl, got = _label_with_pixmap(100, 80, 100, 80)
+    QTest.mouseClick(lbl, Qt.LeftButton, pos=QPoint(42, 17))
+    assert got == [(42, 17)]
+
+
+def test_click_outside_the_image_is_ignored(qapp):
+    """여백을 눌렀을 때 엉뚱한 좌표를 흘리면 안 된다."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    lbl, got = _label_with_pixmap(100, 80, 300, 200)
+    QTest.mouseClick(lbl, Qt.LeftButton, pos=QPoint(5, 5))       # 좌측 여백
+    QTest.mouseClick(lbl, Qt.LeftButton, pos=QPoint(295, 195))   # 우측 여백
+    assert got == []
+
+
+def test_click_without_pixmap_does_nothing(qapp):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication  # noqa: F401
+
+    from crack.gui import ClickableLabel
+
+    lbl = ClickableLabel()
+    lbl.resize(100, 100)
+    got = []
+    lbl.clicked.connect(lambda x, y: got.append((x, y)))
+    QTest.mouseClick(lbl, Qt.LeftButton, pos=QPoint(50, 50))
+    assert got == []
+
+
+def test_click_maps_when_image_is_taller_than_the_label(qapp):
+    """이미지가 라벨보다 크면 위아래가 잘린 채 가운데 정렬된다.
+
+    잘려 나간 높이의 절반은 '음수 여백'이다. 이것을 0 으로 깎아 버리면
+    클릭이 잘린 높이의 절반만큼 통째로 어긋난다 (실제로 겪은 버그).
+    """
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    lbl, got = _label_with_pixmap(100, 800, 300, 200)
+    # 가로 여백 (300-100)/2 = +100, 세로 여백 (200-800)/2 = -300
+    QTest.mouseClick(lbl, Qt.LeftButton, pos=QPoint(110, 5))
+    assert got == [(10, 305)]
+
+
+def test_click_maps_when_image_is_wider_than_the_label(qapp):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    lbl, got = _label_with_pixmap(800, 100, 200, 300)
+    # 가로 여백 (200-800)/2 = -300, 세로 여백 (300-100)/2 = +100
+    QTest.mouseClick(lbl, Qt.LeftButton, pos=QPoint(5, 110))
+    assert got == [(305, 10)]
