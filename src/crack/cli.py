@@ -24,6 +24,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-dxf", action="store_true", help="DXF 출력 생략")
     p.add_argument("--no-tsv", action="store_true", help="TSV 출력 생략")
     p.add_argument("--no-preview", action="store_true", help="미리보기 PNG 생략")
+    p.add_argument(
+        "--preview-by-color",
+        action="store_true",
+        help="색상(등급)별로 미리보기 PNG 를 한 장씩 따로 저장",
+    )
     p.add_argument("--no-stats", action="store_true", help="속성값 분석 TSV 생략")
     p.add_argument(
         "--sort",
@@ -77,6 +82,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_preview:
         written.append(export.write_preview(segments, cfg, result.raster,
                                             out_dir / f"{prefix}_preview.png"))
+    if args.preview_by_color:
+        written.extend(export.write_previews_by_color(
+            segments, cfg, result.raster, out_dir, prefix))
 
     if not args.quiet:
         print()

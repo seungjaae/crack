@@ -65,3 +65,42 @@ def test_toml_rewrite_survives_comments():
         [90, 90, 70, 100, 255, 255]
     ]
     assert "현장 락카 색에 맞춰 조정" in out
+
+
+# ------------------------------------------------------- 선 클릭 판정
+import numpy as np  # noqa: E402
+
+from crack.gui import _point_to_polyline_px  # noqa: E402
+
+
+def test_distance_to_a_segment_endpoint():
+    poly = np.array([[0.0, 0.0], [10.0, 0.0]])
+    assert _point_to_polyline_px(np.array([0.0, 3.0]), poly) == pytest.approx(3.0)
+
+
+def test_distance_projects_onto_the_segment():
+    """선분 중간에 수직으로 떨어지는 거리를 재야 한다."""
+    poly = np.array([[0.0, 0.0], [10.0, 0.0]])
+    assert _point_to_polyline_px(np.array([5.0, 4.0]), poly) == pytest.approx(4.0)
+
+
+def test_distance_is_clamped_past_the_end():
+    """선분을 벗어난 지점은 끝점까지의 거리로 잰다 (무한 직선이 아니다)."""
+    poly = np.array([[0.0, 0.0], [10.0, 0.0]])
+    assert _point_to_polyline_px(np.array([13.0, 4.0]), poly) == pytest.approx(5.0)
+
+
+def test_distance_uses_the_nearest_of_many_vertices():
+    poly = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]])
+    assert _point_to_polyline_px(np.array([12.0, 5.0]), poly) == pytest.approx(2.0)
+
+
+def test_degenerate_single_point_polyline():
+    poly = np.array([[4.0, 3.0]])
+    assert _point_to_polyline_px(np.array([0.0, 0.0]), poly) == pytest.approx(5.0)
+
+
+def test_zero_length_segment_does_not_divide_by_zero():
+    poly = np.array([[2.0, 2.0], [2.0, 2.0]])
+    d = _point_to_polyline_px(np.array([2.0, 5.0]), poly)
+    assert np.isfinite(d) and d == pytest.approx(3.0)

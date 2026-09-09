@@ -139,8 +139,12 @@ def write_preview(
     raster: Raster,
     out_path: str | Path,
     max_px: int = 2000,
+    caption: str | None = None,
 ) -> Path:
-    """검수용 미리보기 PNG. 원본 위에 추출된 선을 겹쳐 그린다."""
+    """검수용 미리보기 PNG. 원본 위에 추출된 선을 겹쳐 그린다.
+
+    caption 을 주면 좌측 상단에 자막을 넣는다 (색상별 미리보기 구분용).
+    """
     import cv2
 
     from .raster import read_overview
@@ -162,14 +166,50 @@ def write_preview(
     }
 
     for s in segments:
-        cols_rows = np.array([inv * (float(x), float(y)) for x, y in s.points_world])
+        cols_rows = np.array([inv @ (float(x), float(y)) for x, y in s.points_world])
         pts = np.round(cols_rows * scale).astype(np.int32)
         bgr = draw_bgr.get(s.color, (255, 255, 255))
         cv2.polylines(canvas, [pts], isClosed=False, color=bgr, thickness=2,
                       lineType=cv2.LINE_AA)
 
+    if caption:
+        cv2.rectangle(canvas, (0, 0), (canvas.shape[1], 34), (0, 0, 0), -1)
+        cv2.putText(canvas, caption, (12, 23), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.62, (255, 255, 255), 1, cv2.LINE_AA)
+
     cv2.imwrite(str(out), canvas)
     return out
+
+
+def write_previews_by_color(
+    segments: list[CrackSegment],
+    cfg: Config,
+    raster: Raster,
+    out_dir: str | Path,
+    prefix: str,
+    max_px: int = 2000,
+) -> list[Path]:
+    """등급(색상)별로 한 장씩 미리보기를 만든다.
+
+    한 장에 세 색을 겹쳐 보면 서로 가려서 검수가 어렵다.
+    색상별로 떼어 놓으면 그 색만 따로 확인할 수 있다.
+    """
+    out_dir = Path(out_dir)
+    written: list[Path] = []
+    for grade in cfg.grades:
+        sel = [s for s in segments if s.grade_id == grade.id]
+        caption = (
+            f"{grade.id} / {grade.color} - {len(sel)} segments, "
+            f"{sum(s.length_mm for s in sel) / 1000:.2f} m"
+        )
+        written.append(
+            write_preview(
+                sel, cfg, raster,
+                out_dir / f"{prefix}_preview_{grade.id}_{grade.color}.png",
+                max_px=max_px, caption=caption,
+            )
+        )
+    return written
 
 
 STATS_COLUMNS = [

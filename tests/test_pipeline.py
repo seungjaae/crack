@@ -67,3 +67,15 @@ def test_exports(result, tmp_path):
     header, *rows = tsv.read_text(encoding="utf-8-sig").strip().split("\n")
     assert header.split("\t") == export.TSV_COLUMNS
     assert len(rows) == len(res.segments)
+
+
+def test_per_color_previews_are_written(result, tmp_path):
+    """색상별로 한 장씩, 그 색 세그먼트만 담아 저장한다."""
+    cfg, res = result
+    paths = export.write_previews_by_color(
+        res.segments, cfg, res.raster, tmp_path, "deck"
+    )
+    assert len(paths) == len(cfg.grades)
+    for p, g in zip(paths, cfg.grades):
+        assert p.is_file() and p.stat().st_size > 0
+        assert g.id in p.name and g.color in p.name

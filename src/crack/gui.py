@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QImage, QPixmap
+from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -136,6 +136,30 @@ class ColorControls(QWidget):
         )
 
 
+class ClickableLabel(QLabel):
+    """캔버스. 픽스맵을 원래 크기로 그리므로 클릭 좌표 = 미리보기 픽셀 좌표."""
+
+    clicked = Signal(int, int)
+
+    def mousePressEvent(self, ev) -> None:  # noqa: N802 - Qt 규약
+        pos = ev.position()
+        self.clicked.emit(int(pos.x()), int(pos.y()))
+
+
+def _point_to_polyline_px(pt: np.ndarray, poly: np.ndarray) -> float:
+    """점에서 폴리라인까지의 최단 거리 (픽셀)."""
+    if len(poly) == 1:
+        return float(np.hypot(*(pt - poly[0])))
+    a = poly[:-1]
+    b = poly[1:]
+    ab = b - a
+    denom = (ab * ab).sum(axis=1)
+    denom[denom == 0] = 1e-9
+    t = np.clip(((pt - a) * ab).sum(axis=1) / denom, 0.0, 1.0)
+    proj = a + t[:, None] * ab
+    return float(np.hypot(proj[:, 0] - pt[0], proj[:, 1] - pt[1]).min())
+
+
 class ExtractWorker(QThread):
     """원본 해상도 추출은 UI 를 막지 않도록 별도 스레드에서."""
 
@@ -167,6 +191,12 @@ class MainWindow(QMainWindow):
         self.result = None
         self.worker: ExtractWorker | None = None
 
+        # 잘못 추출된 선 관리
+        self.removed: set[int] = set()          # 지운 세그먼트 id
+        self.undo_stack: list[int] = []         # 지운 순서 (되돌리기용)
+        self.selected: int | None = None        # 현재 선택된 세그먼트 id
+        self._preview_pts: dict[int, np.ndarray] = {}   # id -> 미리보기 좌표
+
         self.setWindowTitle("Concrete to Code — 균열 추출 엔진")
         self.resize(1400, 900)
 
@@ -180,6 +210,9 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_canvas()
         self._build_dock()
+
+        QShortcut(QKeySequence(Qt.Key_Delete), self, self.delete_selected)
+        QShortcut(QKeySequence.Undo, self, self.undo_delete)
 
         self.statusBar().showMessage("GeoTIFF 정사영상을 열어 주세요.")
 
@@ -211,10 +244,11 @@ class MainWindow(QMainWindow):
         tb.addWidget(self.view_mode)
 
     def _build_canvas(self) -> None:
-        self.canvas = QLabel(alignment=Qt.AlignCenter)
+        self.canvas = ClickableLabel(alignment=Qt.AlignCenter)
         self.canvas.setMinimumSize(640, 480)
         self.canvas.setStyleSheet("background:#1b1b1b;")
         self.canvas.setText("정사영상을 열어 주세요")
+        self.canvas.clicked.connect(self._on_canvas_click)
         area = QScrollArea()
         area.setWidget(self.canvas)
         area.setWidgetResizable(True)
@@ -274,6 +308,47 @@ class MainWindow(QMainWindow):
         sform.addRow("길이 구간(mm)", self.bins_edit)
         lay.addWidget(sort_box)
 
+        # ---- 색상별 보기 ----
+        vis_box = QGroupBox("표시할 색상")
+        vlay = QHBoxLayout(vis_box)
+        self.vis: dict[str, QCheckBox] = {}
+        for grade in self.cfg.grades:
+            cb = QCheckBox(f"{grade.id}·{grade.color}")
+            cb.setChecked(True)
+            cb.stateChanged.connect(self._refresh_canvas)
+            self.vis[grade.id] = cb
+            vlay.addWidget(cb)
+        lay.addWidget(vis_box)
+
+        # ---- 잘못 추출된 선 제거 ----
+        del_box = QGroupBox("선 편집")
+        dlay = QVBoxLayout(del_box)
+        self.sel_label = QLabel("선을 클릭해 선택하세요")
+        self.sel_label.setStyleSheet("color:#777; font-size:11px;")
+        self.sel_label.setWordWrap(True)
+        dlay.addWidget(self.sel_label)
+
+        btns = QHBoxLayout()
+        self.btn_del = QPushButton("선택 삭제")
+        self.btn_del.setEnabled(False)
+        self.btn_del.clicked.connect(self.delete_selected)
+        self.btn_undo = QPushButton("되돌리기")
+        self.btn_undo.setEnabled(False)
+        self.btn_undo.clicked.connect(self.undo_delete)
+        self.btn_restore = QPushButton("전체 복원")
+        self.btn_restore.setEnabled(False)
+        self.btn_restore.clicked.connect(self.restore_all)
+        for b in (self.btn_del, self.btn_undo, self.btn_restore):
+            btns.addWidget(b)
+        dlay.addLayout(btns)
+
+        hint = QLabel("단축키: Delete 삭제 · Ctrl+Z 되돌리기\n"
+                      "삭제한 선은 통계와 내보내기에서 함께 빠집니다.")
+        hint.setStyleSheet("color:#777; font-size:11px;")
+        hint.setWordWrap(True)
+        dlay.addWidget(hint)
+        lay.addWidget(del_box)
+
         btn_save = QPushButton("현재 임계값을 설정 파일에 저장")
         btn_save.clicked.connect(self.save_config)
         lay.addWidget(btn_save)
@@ -326,15 +401,101 @@ class MainWindow(QMainWindow):
             ),
         )
 
+    def active_segments(self) -> list:
+        """삭제되지 않은 세그먼트만. 통계와 내보내기는 항상 이것을 쓴다."""
+        if self.result is None:
+            return []
+        return [s for s in self.result.segments if s.id not in self.removed]
+
     def _refresh_stats(self) -> None:
         """정렬 기준이나 길이 구간이 바뀌면 재추출 없이 분석만 다시 한다."""
         if self.result is None:
             return
         cfg = self.current_config()
-        segs = stats.sort_segments(self.result.segments, cfg)
-        self.stats.setPlainText(
-            stats.format_report(stats.analyze(segs, cfg), cfg)
+        segs = stats.sort_segments(self.active_segments(), cfg)
+        text = stats.format_report(stats.analyze(segs, cfg), cfg)
+        if self.removed:
+            text += f"\n\n  * 사용자가 삭제한 선 {len(self.removed)}개는 제외된 값입니다."
+        self.stats.setPlainText(text)
+
+    # -------------------------------------------------------- 선 편집
+    def _build_preview_pts(self) -> None:
+        """세그먼트를 미리보기 픽셀 좌표로 미리 변환해 둔다 (클릭 판정용)."""
+        self._preview_pts = {}
+        if self.result is None or self.raster is None:
+            return
+        inv = ~self.raster.transform
+        for s in self.result.segments:
+            pts = np.array([inv @ (float(x), float(y)) for x, y in s.points_world])
+            self._preview_pts[s.id] = pts * self.preview_scale
+
+    def _on_canvas_click(self, x: int, y: int) -> None:
+        """클릭 지점에서 가장 가까운 선을 고른다."""
+        if self.result is None or self.view_mode.currentIndex() != 2:
+            return
+        pt = np.array([float(x), float(y)])
+        visible = {g.id for g in self.cfg.grades if self.vis[g.id].isChecked()}
+
+        best, best_d = None, 1e18
+        for s in self.active_segments():
+            if s.grade_id not in visible:
+                continue
+            poly = self._preview_pts.get(s.id)
+            if poly is None or len(poly) == 0:
+                continue
+            d = _point_to_polyline_px(pt, poly)
+            if d < best_d:
+                best, best_d = s, d
+
+        # 너무 멀리 찍으면 선택 해제
+        self.selected = best.id if (best is not None and best_d <= 12.0) else None
+        if self.selected is not None and best is not None:
+            self.sel_label.setText(
+                f"선택: #{best.id}  {best.grade_id}·{best.color}  "
+                f"길이 {best.length_mm:,.1f} mm"
+            )
+        else:
+            self.sel_label.setText("선을 클릭해 선택하세요")
+        self._update_edit_buttons()
+        self._refresh_canvas()
+
+    def delete_selected(self) -> None:
+        if self.selected is None:
+            return
+        self.removed.add(self.selected)
+        self.undo_stack.append(self.selected)
+        self.selected = None
+        self.sel_label.setText(f"삭제됨. 총 {len(self.removed)}개 제외 중")
+        self._after_edit()
+
+    def undo_delete(self) -> None:
+        if not self.undo_stack:
+            return
+        sid = self.undo_stack.pop()
+        self.removed.discard(sid)
+        self.selected = sid
+        self.sel_label.setText(f"#{sid} 복원됨. 총 {len(self.removed)}개 제외 중")
+        self._after_edit()
+
+    def restore_all(self) -> None:
+        self.removed.clear()
+        self.undo_stack.clear()
+        self.sel_label.setText("전체 복원됨")
+        self._after_edit()
+
+    def _after_edit(self) -> None:
+        self._update_edit_buttons()
+        self._refresh_stats()
+        self._refresh_canvas()
+        n = len(self.active_segments())
+        self.statusBar().showMessage(
+            f"세그먼트 {n}개 (삭제 {len(self.removed)}개 제외)"
         )
+
+    def _update_edit_buttons(self) -> None:
+        self.btn_del.setEnabled(self.selected is not None)
+        self.btn_undo.setEnabled(bool(self.undo_stack))
+        self.btn_restore.setEnabled(bool(self.removed))
 
     # ------------------------------------------------------------ 액션
     def open_image(self) -> None:
@@ -379,6 +540,14 @@ class MainWindow(QMainWindow):
     def _extract_done(self, result) -> None:
         self.result = result
         self.worker = None
+        # 새로 추출했으므로 이전 편집 이력은 의미가 없다
+        self.removed.clear()
+        self.undo_stack.clear()
+        self.selected = None
+        self.sel_label.setText("선을 클릭해 선택하세요")
+        self._update_edit_buttons()
+        self._build_preview_pts()
+
         self.act_run.setEnabled(True)
         self.act_export.setEnabled(True)
         self.view_mode.setCurrentIndex(2)
@@ -401,7 +570,7 @@ class MainWindow(QMainWindow):
             return
         cfg = self.current_config()
         prefix = self.raster.path.stem
-        segs = stats.sort_segments(self.result.segments, cfg)
+        segs = stats.sort_segments(self.active_segments(), cfg)
         summary = stats.analyze(segs, cfg)
         try:
             paths = [
@@ -412,7 +581,14 @@ class MainWindow(QMainWindow):
                 export.write_stats_tsv(
                     summary, cfg, Path(out_dir) / f"{prefix}_stats.tsv"
                 ),
+                export.write_preview(
+                    segs, cfg, self.result.raster,
+                    Path(out_dir) / f"{prefix}_preview.png",
+                ),
             ]
+            paths += export.write_previews_by_color(
+                segs, cfg, self.result.raster, Path(out_dir), prefix
+            )
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "내보내기 실패", str(e))
             return
@@ -461,18 +637,26 @@ class MainWindow(QMainWindow):
         if self.result is None or self.raster is None:
             return self.preview_rgb
         out = (self.preview_rgb * 0.4).astype(np.uint8)
-        inv = ~self.raster.transform
+        visible = {g.id for g in self.cfg.grades if self.vis[g.id].isChecked()}
+
+        def draw(sid, color, thickness):
+            poly = self._preview_pts.get(sid)
+            if poly is None or len(poly) < 2:
+                return
+            cv2.polylines(out, [np.round(poly).astype(np.int32)], False,
+                          color, thickness, cv2.LINE_AA)
+
+        # 삭제한 선은 지운 자리를 알 수 있게 흐리게 남겨 둔다
         for s in self.result.segments:
-            pts = np.array([inv * (float(x), float(y)) for x, y in s.points_world])
-            pts = np.round(pts * self.preview_scale).astype(np.int32)
-            cv2.polylines(
-                out,
-                [pts],
-                False,
-                OVERLAY_RGB.get(s.color, (255, 255, 255)),
-                2,
-                cv2.LINE_AA,
-            )
+            if s.id in self.removed and s.grade_id in visible:
+                draw(s.id, (110, 110, 110), 1)
+
+        for s in self.active_segments():
+            if s.grade_id in visible:
+                draw(s.id, OVERLAY_RGB.get(s.color, (255, 255, 255)), 2)
+
+        if self.selected is not None and self.selected not in self.removed:
+            draw(self.selected, (255, 255, 255), 4)
         return out
 
 
