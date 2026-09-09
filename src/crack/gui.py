@@ -26,8 +26,10 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -38,8 +40,8 @@ from PySide6.QtWidgets import (
 )
 
 from . import config as config_mod
-from . import export, pipeline, segment
-from .config import ColorSpec, Config
+from . import export, pipeline, segment, stats
+from .config import SORT_KEYS, ColorSpec, Config
 from .raster import Raster, open_raster, read_overview
 
 PREVIEW_MAX_PX = 1600
@@ -248,15 +250,43 @@ class MainWindow(QMainWindow):
         self.chk_text.setChecked(self.cfg.export.write_text)
         lay.addWidget(self.chk_text)
 
+        sort_box = QGroupBox("속성값 분석")
+        sform = QFormLayout(sort_box)
+        self.sort_mode = QComboBox()
+        for key, label in (
+            ("grade_length", "색상순 · 긴 것부터"),
+            ("grade", "색상순"),
+            ("length_desc", "긴 것부터"),
+            ("length", "짧은 것부터"),
+            ("id", "추출 순서"),
+        ):
+            self.sort_mode.addItem(label, key)
+        idx = self.sort_mode.findData(self.cfg.analysis.sort_by)
+        self.sort_mode.setCurrentIndex(max(0, idx))
+        self.sort_mode.currentIndexChanged.connect(self._refresh_stats)
+        sform.addRow("정렬", self.sort_mode)
+
+        self.bins_edit = QLineEdit(
+            ", ".join(f"{b:g}" for b in self.cfg.analysis.length_bins_mm)
+        )
+        self.bins_edit.setPlaceholderText("예: 300, 600, 1000, 2000")
+        self.bins_edit.editingFinished.connect(self._refresh_stats)
+        sform.addRow("길이 구간(mm)", self.bins_edit)
+        lay.addWidget(sort_box)
+
         btn_save = QPushButton("현재 임계값을 설정 파일에 저장")
         btn_save.clicked.connect(self.save_config)
         lay.addWidget(btn_save)
 
-        self.stats = QLabel("—")
-        self.stats.setStyleSheet("font-family: Consolas, monospace; font-size: 11px;")
-        self.stats.setWordWrap(True)
-        lay.addWidget(self.stats)
-        lay.addStretch(1)
+        self.stats = QPlainTextEdit()
+        self.stats.setReadOnly(True)
+        self.stats.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.stats.setPlaceholderText("추출을 실행하면 속성값 분석 결과가 표시됩니다.")
+        self.stats.setStyleSheet(
+            "font-family: 'D2Coding', Consolas, monospace; font-size: 11px;"
+        )
+        self.stats.setMinimumHeight(260)
+        lay.addWidget(self.stats, 1)
 
         dock = QDockWidget("임계값 조정", self)
         dock.setWidget(panel)
@@ -265,6 +295,17 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, dock)
 
     # ------------------------------------------------------------- 상태
+    def _parse_bins(self) -> tuple[float, ...]:
+        """길이 구간 입력을 읽는다. 잘못 적었으면 기존 값을 그대로 쓴다."""
+        try:
+            vals = [
+                float(t) for t in self.bins_edit.text().replace(" ", "").split(",") if t
+            ]
+        except ValueError:
+            return self.cfg.analysis.length_bins_mm
+        vals = sorted(v for v in vals if v > 0)
+        return tuple(vals) if vals else self.cfg.analysis.length_bins_mm
+
     def current_config(self) -> Config:
         colors = dict(self.cfg.colors)
         for name, ctrl in self.controls.items():
@@ -278,6 +319,21 @@ class MainWindow(QMainWindow):
                 min_elongation=float(self.min_elong.value()),
             ),
             export=replace(self.cfg.export, write_text=self.chk_text.isChecked()),
+            analysis=replace(
+                self.cfg.analysis,
+                sort_by=self.sort_mode.currentData() or self.cfg.analysis.sort_by,
+                length_bins_mm=self._parse_bins(),
+            ),
+        )
+
+    def _refresh_stats(self) -> None:
+        """정렬 기준이나 길이 구간이 바뀌면 재추출 없이 분석만 다시 한다."""
+        if self.result is None:
+            return
+        cfg = self.current_config()
+        segs = stats.sort_segments(self.result.segments, cfg)
+        self.stats.setPlainText(
+            stats.format_report(stats.analyze(segs, cfg), cfg)
         )
 
     # ------------------------------------------------------------ 액션
@@ -326,7 +382,7 @@ class MainWindow(QMainWindow):
         self.act_run.setEnabled(True)
         self.act_export.setEnabled(True)
         self.view_mode.setCurrentIndex(2)
-        self.stats.setText(export.summarize(result.segments, self.current_config()))
+        self._refresh_stats()
         self.statusBar().showMessage(
             f"추출 완료 — 세그먼트 {len(result.segments)}개, {result.elapsed_s:.1f}초"
         )
@@ -345,16 +401,16 @@ class MainWindow(QMainWindow):
             return
         cfg = self.current_config()
         prefix = self.raster.path.stem
+        segs = stats.sort_segments(self.result.segments, cfg)
+        summary = stats.analyze(segs, cfg)
         try:
             paths = [
                 export.write_dxf(
-                    self.result.segments,
-                    cfg,
-                    self.result.raster,
-                    Path(out_dir) / f"{prefix}.dxf",
+                    segs, cfg, self.result.raster, Path(out_dir) / f"{prefix}.dxf"
                 ),
-                export.write_tsv(
-                    self.result.segments, cfg, Path(out_dir) / f"{prefix}.tsv"
+                export.write_tsv(segs, cfg, Path(out_dir) / f"{prefix}.tsv"),
+                export.write_stats_tsv(
+                    summary, cfg, Path(out_dir) / f"{prefix}_stats.tsv"
                 ),
             ]
         except Exception as e:  # noqa: BLE001

@@ -42,6 +42,15 @@ class Vectorize:
     prune_spur_px: int
 
 
+SORT_KEYS = ("grade_length", "grade", "length", "length_desc", "id")
+
+
+@dataclass(frozen=True)
+class Analysis:
+    length_bins_mm: tuple[float, ...]
+    sort_by: str
+
+
 @dataclass(frozen=True)
 class Export:
     dxf_version: str
@@ -59,6 +68,7 @@ class Config:
     denoise: Denoise
     vectorize: Vectorize
     export: Export
+    analysis: Analysis
 
     def grade_for_color(self, color: str) -> Grade | None:
         for g in self.grades:
@@ -113,6 +123,18 @@ def load(path: str | Path | None = None) -> Config:
             raise ValueError(f"색상 '{g.color}' 이 둘 이상의 등급에 매핑되어 있습니다")
         seen_colors.add(g.color)
 
+    # [analysis] 는 없어도 되도록 기본값을 둔다. 기존 설정 파일이 그대로 동작한다.
+    a = raw.get("analysis", {})
+    sort_by = str(a.get("sort_by", "grade_length"))
+    if sort_by not in SORT_KEYS:
+        raise ValueError(
+            f"[analysis] sort_by '{sort_by}' 을 알 수 없습니다. "
+            f"사용 가능: {', '.join(SORT_KEYS)}"
+        )
+    bins = sorted(float(x) for x in a.get("length_bins_mm", [300, 600, 1000, 2000]))
+    if any(x <= 0 for x in bins):
+        raise ValueError("[analysis] length_bins_mm 은 모두 0 보다 커야 합니다")
+
     return Config(
         fallback_gsd_mm=float(raw.get("project", {}).get("fallback_gsd_mm", 0.5)),
         colors=colors,
@@ -120,4 +142,5 @@ def load(path: str | Path | None = None) -> Config:
         denoise=Denoise(**raw["denoise"]),
         vectorize=Vectorize(**raw["vectorize"]),
         export=Export(**raw["export"]),
+        analysis=Analysis(length_bins_mm=tuple(bins), sort_by=sort_by),
     )

@@ -9,6 +9,7 @@ from typing import Iterator
 
 import numpy as np
 import rasterio
+from rasterio.transform import Affine
 from rasterio.windows import Window
 
 # CRS 선형단위 -> mm 환산 계수
@@ -152,11 +153,15 @@ def open_raster(path: str | Path, fallback_gsd_mm: float = 0.5) -> Raster:
         gsd_mm = abs(transform.a) * mm_per_unit
     else:
         warnings.warn(
-            "GeoTIFF 에 좌표계가 없습니다. 픽셀 좌표와 설정의 fallback_gsd_mm 을 사용합니다.",
+            f"좌표계가 없는 영상입니다. GSD {fallback_gsd_mm} mm/px 로 가정하고 "
+            "원점을 좌측 하단으로 둔 밀리미터 좌표로 출력합니다.",
             stacklevel=2,
         )
-        mm_per_unit = fallback_gsd_mm
         gsd_mm = fallback_gsd_mm
+        mm_per_unit = 1.0
+        # 좌표계가 없으면 밀리미터를 그대로 도면 좌표로 쓴다. 영상은 y 가 아래로
+        # 증가하지만 도면은 위로 증가하므로 뒤집어서 원점을 좌측 하단에 둔다.
+        transform = Affine(gsd_mm, 0.0, 0.0, 0.0, -gsd_mm, height * gsd_mm)
 
     return Raster(
         path=p,

@@ -12,6 +12,7 @@ from ezdxf import units as ezunits
 from .config import Config
 from .model import CrackSegment
 from .raster import Raster
+from .stats import Summary
 
 TSV_COLUMNS = [
     "id",
@@ -132,25 +133,6 @@ def write_tsv(
     return out
 
 
-def summarize(segments: list[CrackSegment], cfg: Config) -> str:
-    """등급별 개수/총연장 요약 문자열."""
-    lines = ["등급별 집계", "-" * 52]
-    total_n = 0
-    total_len = 0.0
-    for grade in cfg.grades:
-        sel = [s for s in segments if s.grade_id == grade.id]
-        length = sum(s.length_mm for s in sel)
-        total_n += len(sel)
-        total_len += length
-        lines.append(
-            f"  {grade.id} ({grade.color:<6} {grade.label})  "
-            f"{len(sel):>5} 개   {length / 1000:>10.2f} m"
-        )
-    lines.append("-" * 52)
-    lines.append(f"  {'합계':<24}{total_n:>7} 개   {total_len / 1000:>10.2f} m")
-    return "\n".join(lines)
-
-
 def write_preview(
     segments: list[CrackSegment],
     cfg: Config,
@@ -187,4 +169,55 @@ def write_preview(
                       lineType=cv2.LINE_AA)
 
     cv2.imwrite(str(out), canvas)
+    return out
+
+
+STATS_COLUMNS = [
+    "구분", "항목", "설명", "개수", "총연장_mm", "총연장_m", "개수비율_%", "연장비율_%",
+]
+
+
+def write_stats_tsv(
+    summary: Summary,
+    cfg: Config,
+    out_path: str | Path,
+) -> Path:
+    """속성값 분석 결과를 표로 쓴다. 엑셀에서 바로 열린다."""
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    d = cfg.export.tsv_delimiter
+    grade_ids = [g.id for g in cfg.grades]
+
+    def row(vals) -> str:
+        return d.join(str(v) for v in vals) + "\n"
+
+    with out.open("w", encoding="utf-8-sig", newline="") as fh:
+        fh.write(row(STATS_COLUMNS + grade_ids))
+
+        # 전체 합계
+        totals = {g.grade_id: g.count for g in summary.by_grade}
+        fh.write(row([
+            "전체", "TOTAL", "총합",
+            summary.count, f"{summary.total_mm:.1f}", f"{summary.total_m:.3f}",
+            "100.0", "100.0",
+        ] + [totals.get(gid, 0) for gid in grade_ids]))
+
+        # 폭별(등급별)
+        for g in summary.by_grade:
+            fh.write(row([
+                "폭별", g.grade_id, g.label,
+                g.count, f"{g.total_mm:.1f}", f"{g.total_mm / 1000:.3f}",
+                f"{g.pct_count:.1f}", f"{g.pct_length:.1f}",
+            ] + [g.count if gid == g.grade_id else 0 for gid in grade_ids]))
+
+        # 길이별
+        for b in summary.by_length:
+            pct_len = b.total_mm / summary.total_mm * 100 if summary.total_mm else 0.0
+            key = f"{b.lo_mm or 0:.0f}-{b.hi_mm:.0f}" if b.hi_mm else f"{b.lo_mm:.0f}+"
+            fh.write(row([
+                "길이별", key, b.label,
+                b.count, f"{b.total_mm:.1f}", f"{b.total_mm / 1000:.3f}",
+                f"{b.pct_count:.1f}", f"{pct_len:.1f}",
+            ] + [b.by_grade.get(gid, 0) for gid in grade_ids]))
+
     return out
