@@ -42,7 +42,9 @@ from PySide6.QtWidgets import (
 from . import config as config_mod
 from . import export, pipeline, segment, stats
 from .config import SORT_KEYS, ColorSpec, Config
+from .model import CrackSegment
 from .raster import Raster, open_raster, read_overview
+from .skeleton import polyline_length
 
 PREVIEW_MAX_PX = 1600
 
@@ -144,11 +146,13 @@ class ClickableLabel(QLabel):
     """캔버스. 클릭 위치를 미리보기 픽셀 좌표로 바꿔서 알린다."""
 
     clicked = Signal(int, int)
+    double_clicked = Signal()
 
-    def mousePressEvent(self, ev) -> None:  # noqa: N802 - Qt 규약
+    def _to_image_px(self, ev) -> tuple[int, int] | None:
+        """위젯 좌표를 이미지 픽셀 좌표로. 이미지 바깥이면 None."""
         pm = self.pixmap()
         if pm is None or pm.isNull():
-            return
+            return None
 
         # 이미지는 라벨 안에서 가운데 정렬된다. 그 여백을 빼야 좌표가 맞는다.
         # 이미지가 라벨보다 크면 여백은 음수가 된다 (위아래가 잘려 나간 만큼).
@@ -160,8 +164,18 @@ class ClickableLabel(QLabel):
 
         pos = ev.position()
         x, y = pos.x() - off_x, pos.y() - off_y
-        if 0.0 <= x < pw and 0.0 <= y < ph:      # 이미지 바깥 클릭은 무시
-            self.clicked.emit(int(x), int(y))
+        if 0.0 <= x < pw and 0.0 <= y < ph:
+            return int(x), int(y)
+        return None
+
+    def mousePressEvent(self, ev) -> None:  # noqa: N802 - Qt 규약
+        hit = self._to_image_px(ev)
+        if hit is not None:
+            self.clicked.emit(*hit)
+
+    def mouseDoubleClickEvent(self, ev) -> None:  # noqa: N802 - Qt 규약
+        if self._to_image_px(ev) is not None:
+            self.double_clicked.emit()
 
 
 def _point_to_polyline_px(pt: np.ndarray, poly: np.ndarray) -> float:
@@ -215,6 +229,10 @@ class MainWindow(QMainWindow):
         self.selected: int | None = None        # 현재 선택된 세그먼트 id
         self._preview_pts: dict[int, np.ndarray] = {}   # id -> 미리보기 좌표
 
+        # 놓친 선 직접 그리기
+        self.drawing = False
+        self.draw_pts: list[tuple[float, float]] = []   # 미리보기 좌표
+
         self.setWindowTitle("Concrete to Code — 균열 추출 엔진")
         self.resize(1400, 900)
 
@@ -231,6 +249,10 @@ class MainWindow(QMainWindow):
 
         QShortcut(QKeySequence(Qt.Key_Delete), self, self.delete_selected)
         QShortcut(QKeySequence.Undo, self, self.undo_delete)
+        QShortcut(QKeySequence(Qt.Key_Return), self, self.finish_drawing)
+        QShortcut(QKeySequence(Qt.Key_Enter), self, self.finish_drawing)
+        QShortcut(QKeySequence(Qt.Key_Escape), self, self.cancel_drawing)
+        QShortcut(QKeySequence(Qt.Key_Backspace), self, self.undo_vertex)
 
         self.statusBar().showMessage("GeoTIFF 정사영상을 열어 주세요.")
 
@@ -267,6 +289,7 @@ class MainWindow(QMainWindow):
         self.canvas.setStyleSheet("background:#1b1b1b;")
         self.canvas.setText("정사영상을 열어 주세요")
         self.canvas.clicked.connect(self._on_canvas_click)
+        self.canvas.double_clicked.connect(self.finish_drawing)
         area = QScrollArea()
         area.setWidget(self.canvas)
         area.setWidgetResizable(True)
@@ -367,6 +390,46 @@ class MainWindow(QMainWindow):
         dlay.addWidget(hint)
         lay.addWidget(del_box)
 
+        # ---- 놓친 선 직접 그려 넣기 ----
+        # 마커 붓칠이 흐리거나 끊긴 구간은 자동 추출이 놓친다. 사람이 보완한다.
+        add_box = QGroupBox("선 추가")
+        alay = QVBoxLayout(add_box)
+
+        top = QHBoxLayout()
+        self.btn_draw = QPushButton("그리기 시작")
+        self.btn_draw.setCheckable(True)
+        self.btn_draw.toggled.connect(self._toggle_draw_mode)
+        top.addWidget(self.btn_draw)
+        top.addWidget(QLabel("색상:"))
+        self.draw_grade = QComboBox()
+        for grade in self.cfg.grades:
+            self.draw_grade.addItem(f"{grade.id}·{grade.color}", grade.id)
+        top.addWidget(self.draw_grade, 1)
+        alay.addLayout(top)
+
+        self.draw_label = QLabel("추출이 놓친 균열을 직접 그려 넣을 수 있습니다.")
+        self.draw_label.setStyleSheet("color:#777; font-size:11px;")
+        self.draw_label.setWordWrap(True)
+        alay.addWidget(self.draw_label)
+
+        dbtns = QHBoxLayout()
+        self.btn_finish = QPushButton("선 완료")
+        self.btn_finish.setEnabled(False)
+        self.btn_finish.clicked.connect(self.finish_drawing)
+        self.btn_cancel = QPushButton("그리기 취소")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self.cancel_drawing)
+        dbtns.addWidget(self.btn_finish)
+        dbtns.addWidget(self.btn_cancel)
+        alay.addLayout(dbtns)
+
+        dhint = QLabel("클릭으로 점을 찍고, 더블클릭 또는 Enter 로 마칩니다.\n"
+                       "Backspace 마지막 점 취소 · Esc 그리기 취소")
+        dhint.setStyleSheet("color:#777; font-size:11px;")
+        dhint.setWordWrap(True)
+        alay.addWidget(dhint)
+        lay.addWidget(add_box)
+
         btn_save = QPushButton("현재 임계값을 설정 파일에 저장")
         btn_save.clicked.connect(self.save_config)
         lay.addWidget(btn_save)
@@ -432,8 +495,14 @@ class MainWindow(QMainWindow):
         cfg = self.current_config()
         segs = stats.sort_segments(self.active_segments(), cfg)
         text = stats.format_report(stats.analyze(segs, cfg), cfg)
+        notes = []
         if self.removed:
-            text += f"\n\n  * 사용자가 삭제한 선 {len(self.removed)}개는 제외된 값입니다."
+            notes.append(f"사용자가 삭제한 선 {len(self.removed)}개는 제외된 값입니다.")
+        n_manual = sum(1 for s in segs if s.source == "manual")
+        if n_manual:
+            notes.append(f"직접 그려 넣은 선 {n_manual}개가 포함되어 있습니다.")
+        if notes:
+            text += "\n\n" + "\n".join(f"  * {n}" for n in notes)
         self.stats.setPlainText(text)
 
     # -------------------------------------------------------- 선 편집
@@ -448,7 +517,10 @@ class MainWindow(QMainWindow):
             self._preview_pts[s.id] = pts * self.preview_scale
 
     def _on_canvas_click(self, x: int, y: int) -> None:
-        """클릭 지점에서 가장 가까운 선을 고른다."""
+        """그리기 중이면 점을 찍고, 아니면 가장 가까운 선을 고른다."""
+        if self.drawing:
+            self._add_vertex(x, y)
+            return
         if self.result is None or self.view_mode.currentIndex() != 2:
             return
         pt = np.array([float(x), float(y)])
@@ -468,9 +540,10 @@ class MainWindow(QMainWindow):
         # 너무 멀리 찍으면 선택 해제
         self.selected = best.id if (best is not None and best_d <= CLICK_RADIUS_PX) else None
         if self.selected is not None and best is not None:
+            mark = " · 직접 그림" if best.source == "manual" else ""
             self.sel_label.setText(
                 f"선택: #{best.id}  {best.grade_id}·{best.color}  "
-                f"길이 {best.length_mm:,.1f} mm"
+                f"길이 {best.length_mm:,.1f} mm{mark}"
             )
         elif best is not None:
             self.sel_label.setText(
@@ -519,6 +592,91 @@ class MainWindow(QMainWindow):
         self.btn_del.setEnabled(self.selected is not None)
         self.btn_undo.setEnabled(bool(self.undo_stack))
         self.btn_restore.setEnabled(bool(self.removed))
+
+    # -------------------------------------------------------- 선 추가
+    def _toggle_draw_mode(self, on: bool) -> None:
+        self.drawing = on
+        self.draw_pts.clear()
+        self.btn_draw.setText("그리기 종료" if on else "그리기 시작")
+        self.btn_finish.setEnabled(False)
+        self.btn_cancel.setEnabled(on)
+        if on:
+            self.selected = None
+            self.view_mode.setCurrentIndex(2)     # 결과 화면 위에서만 그린다
+            self.draw_label.setText("캔버스를 클릭해 점을 찍으세요.")
+        else:
+            self.draw_label.setText("추출이 놓친 균열을 직접 그려 넣을 수 있습니다.")
+        self._update_edit_buttons()
+        self._refresh_canvas()
+
+    def _draw_length_mm(self) -> float:
+        if self.raster is None or len(self.draw_pts) < 2:
+            return 0.0
+        img_px = np.array(self.draw_pts) / self.preview_scale
+        return float(polyline_length(img_px) * self.raster.gsd_mm)
+
+    def _draw_status(self) -> str:
+        if not self.draw_pts:
+            return "캔버스를 클릭해 점을 찍으세요."
+        return f"{len(self.draw_pts)}점 · 길이 {self._draw_length_mm():,.0f} mm"
+
+    def _add_vertex(self, x: int, y: int) -> None:
+        self.draw_pts.append((float(x), float(y)))
+        self.btn_finish.setEnabled(len(self.draw_pts) >= 2)
+        self.draw_label.setText(self._draw_status())
+        self._refresh_canvas()
+
+    def undo_vertex(self) -> None:
+        if not (self.drawing and self.draw_pts):
+            return
+        self.draw_pts.pop()
+        self.btn_finish.setEnabled(len(self.draw_pts) >= 2)
+        self.draw_label.setText(self._draw_status())
+        self._refresh_canvas()
+
+    def finish_drawing(self) -> None:
+        """찍은 점들로 세그먼트를 하나 만들어 결과에 넣는다."""
+        if not self.drawing or len(self.draw_pts) < 2 or self.result is None:
+            return
+        gid = self.draw_grade.currentData()
+        grade = next(g for g in self.cfg.grades if g.id == gid)
+
+        img_px = np.array(self.draw_pts) / self.preview_scale
+        new_id = max((s.id for s in self.result.segments), default=0) + 1
+        seg = CrackSegment(
+            id=new_id,
+            grade_id=grade.id,
+            grade_label=grade.label,
+            color=grade.color,
+            layer=grade.layer,
+            dxf_color=grade.dxf_color,
+            length_mm=self._draw_length_mm(),
+            paint_width_mm=0.0,        # 사람이 그린 선이라 칠 폭은 알 수 없다
+            points_world=self.raster.px_to_world(img_px),
+            source="manual",
+        )
+        self.result.segments.append(seg)
+        self._preview_pts[seg.id] = np.array(self.draw_pts)
+
+        self.draw_pts.clear()
+        self.btn_finish.setEnabled(False)
+        self.draw_label.setText(
+            f"#{seg.id} 추가됨 · {grade.id}·{grade.color} · "
+            f"{seg.length_mm:,.0f} mm. 이어서 그릴 수 있습니다."
+        )
+        self._refresh_stats()
+        self._refresh_canvas()
+        self.statusBar().showMessage(
+            f"세그먼트 {len(self.active_segments())}개 "
+            f"(직접 추가 {sum(1 for s in self.active_segments() if s.source == 'manual')}개)"
+        )
+
+    def cancel_drawing(self) -> None:
+        self.draw_pts.clear()
+        self.btn_finish.setEnabled(False)
+        self.draw_label.setText(self._draw_status() if self.drawing
+                                else "추출이 놓친 균열을 직접 그려 넣을 수 있습니다.")
+        self._refresh_canvas()
 
     # ------------------------------------------------------------ 액션
     def open_image(self) -> None:
@@ -683,6 +841,20 @@ class MainWindow(QMainWindow):
 
         if self.selected is not None and self.selected not in self.removed:
             draw(self.selected, (255, 255, 255), 4)
+
+        # 그리는 중인 선: 찍은 점과 이어진 구간을 바로 보여 준다
+        if self.drawing and self.draw_pts:
+            gid = self.draw_grade.currentData()
+            grade = next((g for g in self.cfg.grades if g.id == gid), None)
+            col = OVERLAY_RGB.get(grade.color if grade else "", (255, 255, 255))
+            pts = np.round(np.array(self.draw_pts)).astype(np.int32)
+            if len(pts) >= 2:
+                cv2.polylines(out, [pts], False, col, 2, cv2.LINE_AA)
+            for i, (px, py) in enumerate(pts):
+                cv2.circle(out, (int(px), int(py)), 4, (255, 255, 255), -1)
+                cv2.circle(out, (int(px), int(py)), 4, col, 1)
+                if i == 0:
+                    cv2.circle(out, (int(px), int(py)), 7, (255, 255, 255), 1)
         return out
 
 

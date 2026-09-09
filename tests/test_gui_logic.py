@@ -205,3 +205,106 @@ def test_click_maps_when_image_is_wider_than_the_label(qapp):
     # 가로 여백 (200-800)/2 = -300, 세로 여백 (300-100)/2 = +100
     QTest.mouseClick(lbl, Qt.LeftButton, pos=QPoint(5, 110))
     assert got == [(305, 10)]
+
+
+# ------------------------------------------------- 놓친 선 직접 그리기
+@pytest.fixture
+def window(qapp, synthetic_deck):
+    """추출은 돌리지 않고 빈 결과만 얹은 창. 그리기 동작만 본다."""
+    import numpy as np
+
+    from crack import config as config_mod
+    from crack.gui import MainWindow
+    from crack.pipeline import Result
+
+    cfg = config_mod.load()
+    w = MainWindow(cfg, None)
+    w.resize(900, 700)
+    w.show()
+    w.load_image(str(synthetic_deck))
+    w.result = Result(raster=w.raster, segments=[], label=np.zeros((1, 1), np.uint8))
+    w._extract_done(w.result)
+    return w
+
+
+def test_drawn_line_becomes_a_manual_segment(window):
+    w = window
+    w.draw_grade.setCurrentIndex(w.draw_grade.findData("W2"))
+    w.btn_draw.setChecked(True)
+    assert w.drawing
+
+    w._add_vertex(100, 100)
+    w._add_vertex(200, 100)
+    w.finish_drawing()
+
+    assert len(w.result.segments) == 1
+    s = w.result.segments[0]
+    assert s.source == "manual"
+    assert s.grade_id == "W2" and s.color == "yellow"
+
+    # 미리보기 100px -> 원본 250px (축소배율 0.4) -> 125mm (GSD 0.5mm)
+    assert s.length_mm == pytest.approx(125.0, rel=0.02)
+
+
+def test_drawing_needs_at_least_two_points(window):
+    w = window
+    w.btn_draw.setChecked(True)
+    w._add_vertex(50, 50)
+    assert not w.btn_finish.isEnabled()
+    w.finish_drawing()
+    assert w.result.segments == []
+
+
+def test_backspace_removes_the_last_vertex(window):
+    w = window
+    w.btn_draw.setChecked(True)
+    for p in [(10, 10), (20, 20), (30, 30)]:
+        w._add_vertex(*p)
+    w.undo_vertex()
+    assert len(w.draw_pts) == 2
+    w.cancel_drawing()
+    assert w.draw_pts == []
+
+
+def test_drawn_segment_can_be_deleted_like_any_other(window):
+    w = window
+    w.btn_draw.setChecked(True)
+    w._add_vertex(100, 100)
+    w._add_vertex(300, 100)
+    w.finish_drawing()
+    w.btn_draw.setChecked(False)          # 그리기 모드를 꺼야 선택이 된다
+
+    sid = w.result.segments[0].id
+    w.selected = sid
+    w.delete_selected()
+    assert w.active_segments() == []
+    w.undo_delete()
+    assert len(w.active_segments()) == 1
+
+
+def test_manual_segments_count_toward_the_stats(window):
+    from crack import stats as stats_mod
+
+    w = window
+    w.btn_draw.setChecked(True)
+    w._add_vertex(100, 100)
+    w._add_vertex(300, 100)
+    w.finish_drawing()
+
+    summary = stats_mod.analyze(w.active_segments(), w.current_config())
+    assert summary.count == 1
+    assert summary.total_mm > 0
+    assert "직접 그려 넣은 선 1개" in w.stats.toPlainText()
+
+
+def test_source_defaults_to_auto():
+    """자동 추출 세그먼트는 따로 표시하지 않아도 auto 여야 한다."""
+    import numpy as np
+
+    from crack.model import CrackSegment
+
+    s = CrackSegment(
+        id=1, grade_id="W1", grade_label="x", color="red", layer="L", dxf_color=1,
+        length_mm=10.0, paint_width_mm=1.0, points_world=np.zeros((2, 2)),
+    )
+    assert s.source == "auto"

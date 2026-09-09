@@ -20,6 +20,9 @@ class CrackSegment:
     length_mm: float
     paint_width_mm: float
     points_world: np.ndarray  # (N,2) [x, y] 실좌표
+    # "auto" = 프로그램이 추출, "manual" = 사용자가 직접 그림.
+    # 마커 붓칠이 흐리거나 끊긴 구간은 자동 추출이 놓치므로 사람이 보완한다.
+    source: str = "auto"
 
     @property
     def start(self) -> tuple[float, float]:
