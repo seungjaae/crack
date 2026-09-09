@@ -1,0 +1,1010 @@
+<title>교량 균열 추출 엔진</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+
+<style>
+/* ---------- tokens: light (complete set) ---------- */
+:root {
+  --ground:   #EDF1F4;
+  --surface:  #FFFFFF;
+  --surface-2:#F4F7F9;
+  --ink:      #0F1922;
+  --ink-2:    #2B3B49;
+  --muted:    #5C6E7C;
+  --faint:    #8A9BA8;
+  --line:     #CBD7DF;
+  --line-2:   #E1E9EE;
+  --accent:   #0B5E9E;
+  --accent-2: #E8F1F8;
+  --w1:       #CF3323;
+  --w2:       #C88A05;
+  --w3:       #0E86B4;
+  --w1-bg:    #FBE9E7;
+  --w2-bg:    #FBF1DC;
+  --w3-bg:    #E2F2F8;
+  --ok:       #1B7A4B;
+  --code-bg:  #10202C;
+  --code-ink: #D6E4EE;
+  --grid:     rgba(11,94,158,.09);
+}
+/* ---------- tokens: dark ---------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:   #0D141A;
+    --surface:  #151F27;
+    --surface-2:#1B2831;
+    --ink:      #E4EDF3;
+    --ink-2:    #C2D2DD;
+    --muted:    #93A6B4;
+    --faint:    #6E8393;
+    --line:     #2A3A46;
+    --line-2:   #223039;
+    --accent:   #56A8DE;
+    --accent-2: #16303F;
+    --w1:       #F0796A;
+    --w2:       #E8B84A;
+    --w3:       #4FBEE4;
+    --w1-bg:    #34211F;
+    --w2-bg:    #332915;
+    --w3-bg:    #14313C;
+    --ok:       #57C48D;
+    --code-bg:  #0A1219;
+    --code-ink: #CBDCE7;
+    --grid:     rgba(86,168,222,.10);
+  }
+}
+:root[data-theme="dark"] {
+  --ground:   #0D141A;
+  --surface:  #151F27;
+  --surface-2:#1B2831;
+  --ink:      #E4EDF3;
+  --ink-2:    #C2D2DD;
+  --muted:    #93A6B4;
+  --faint:    #6E8393;
+  --line:     #2A3A46;
+  --line-2:   #223039;
+  --accent:   #56A8DE;
+  --accent-2: #16303F;
+  --w1:       #F0796A;
+  --w2:       #E8B84A;
+  --w3:       #4FBEE4;
+  --w1-bg:    #34211F;
+  --w2-bg:    #332915;
+  --w3-bg:    #14313C;
+  --ok:       #57C48D;
+  --code-bg:  #0A1219;
+  --code-ink: #CBDCE7;
+  --grid:     rgba(86,168,222,.10);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: "IBM Plex Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+}
+
+code, kbd, .mono { font-family: "IBM Plex Mono", "Consolas", monospace; }
+
+/* ---------- header ---------- */
+.masthead {
+  border-bottom: 1px solid var(--line);
+  background:
+    repeating-linear-gradient(0deg, var(--grid) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, var(--grid) 0 1px, transparent 1px 28px),
+    var(--surface);
+}
+.masthead-inner {
+  max-width: 1180px; margin: 0 auto; padding: 44px 28px 36px;
+}
+.eyebrow {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--accent); margin: 0 0 14px;
+}
+h1 {
+  font-size: clamp(28px, 4.4vw, 44px); line-height: 1.2; font-weight: 700;
+  margin: 0 0 14px; letter-spacing: -.02em; text-wrap: balance; color: var(--ink);
+}
+.standfirst {
+  font-size: clamp(15px, 1.7vw, 17.5px); color: var(--ink-2);
+  max-width: 60ch; margin: 0 0 28px; line-height: 1.7;
+}
+.facts {
+  display: flex; flex-wrap: wrap; gap: 10px 34px;
+  padding-top: 22px; border-top: 1px solid var(--line);
+}
+.fact { display: flex; flex-direction: column; gap: 1px; }
+.fact dt {
+  font-family: "IBM Plex Mono", monospace; font-size: 10.5px;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--faint);
+}
+.fact dd {
+  margin: 0; font-family: "IBM Plex Mono", monospace;
+  font-size: 14px; font-weight: 500; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- layout ---------- */
+.shell {
+  max-width: 1180px; margin: 0 auto; padding: 0 28px 96px;
+  display: grid; grid-template-columns: 214px minmax(0, 1fr); gap: 52px;
+  align-items: start;
+}
+nav.toc {
+  position: sticky; top: 24px; padding-top: 40px;
+  font-family: "IBM Plex Mono", monospace; font-size: 12.5px;
+}
+nav.toc p {
+  margin: 0 0 12px; font-size: 10.5px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--faint);
+}
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+nav.toc a {
+  display: grid; grid-template-columns: 20px 1fr; gap: 8px;
+  padding: 4px 8px 4px 0; color: var(--muted);
+  text-decoration: none; border-radius: 3px; line-height: 1.45;
+}
+nav.toc a:hover { color: var(--accent); background: var(--accent-2); }
+nav.toc a b { color: var(--faint); font-weight: 500; }
+nav.toc a:hover b { color: var(--accent); }
+
+main { padding-top: 40px; min-width: 0; }
+
+/* ---------- sections ---------- */
+section { scroll-margin-top: 20px; margin-bottom: 12px; padding-bottom: 30px; }
+section + section { border-top: 1px solid var(--line-2); padding-top: 34px; }
+
+h2 {
+  display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: baseline;
+  font-size: clamp(20px, 2.5vw, 25px); font-weight: 700; letter-spacing: -.015em;
+  margin: 0 0 8px; text-wrap: balance;
+}
+h2 .num {
+  font-family: "IBM Plex Mono", monospace; font-size: .62em;
+  font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums;
+}
+h3 {
+  display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: baseline;
+  font-size: 16.5px; font-weight: 600; margin: 30px 0 8px; letter-spacing: -.01em;
+}
+h3 .num {
+  font-family: "IBM Plex Mono", monospace; font-size: .82em;
+  font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums;
+}
+h4 { font-size: 14px; font-weight: 600; margin: 22px 0 6px; color: var(--ink-2); }
+
+p { margin: 0 0 14px; max-width: 68ch; }
+.lede { color: var(--ink-2); max-width: 66ch; }
+strong { font-weight: 600; color: var(--ink); }
+a { color: var(--accent); }
+
+ul, ol.steps { max-width: 68ch; padding-left: 0; margin: 0 0 16px; }
+ul { list-style: none; display: flex; flex-direction: column; gap: 7px; }
+ul li { position: relative; padding-left: 17px; }
+ul li::before {
+  content: ""; position: absolute; left: 2px; top: .68em;
+  width: 5px; height: 5px; background: var(--line); border-radius: 1px;
+}
+
+/* numbered procedure */
+ol.steps { list-style: none; display: flex; flex-direction: column; gap: 0; counter-reset: st; }
+ol.steps li {
+  counter-increment: st; position: relative;
+  padding: 0 0 20px 40px; border-left: 1px solid var(--line);
+  margin-left: 11px;
+}
+ol.steps li:last-child { border-left-color: transparent; padding-bottom: 0; }
+ol.steps li::before {
+  content: counter(st); position: absolute; left: -11.5px; top: 0;
+  width: 23px; height: 23px; border-radius: 50%;
+  background: var(--surface); border: 1px solid var(--line); color: var(--muted);
+  font-family: "IBM Plex Mono", monospace; font-size: 11.5px; font-weight: 600;
+  display: grid; place-items: center; line-height: 1;
+}
+ol.steps li b { display: block; font-weight: 600; margin-bottom: 2px; color: var(--ink); }
+ol.steps li p { margin: 0 0 6px; }
+
+/* ---------- code ---------- */
+pre {
+  background: var(--code-bg); color: var(--code-ink);
+  padding: 15px 18px; border-radius: 5px; overflow-x: auto;
+  font-family: "IBM Plex Mono", monospace; font-size: 12.8px; line-height: 1.62;
+  margin: 0 0 16px; border: 1px solid var(--line-2);
+}
+pre .c { color: #7C93A3; }
+pre .k { color: #7FC7EE; }
+pre .s { color: #E0B978; }
+p code, li code, td code, dd code {
+  font-size: .87em; background: var(--surface-2); color: var(--ink-2);
+  padding: 1.5px 5px; border-radius: 3px; border: 1px solid var(--line-2);
+  white-space: nowrap;
+}
+
+/* ---------- tables ---------- */
+.scroller { overflow-x: auto; margin: 0 0 18px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.4px; min-width: 430px; }
+th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line-2); vertical-align: top; }
+thead th {
+  font-family: "IBM Plex Mono", monospace; font-size: 10.5px; font-weight: 600;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--faint);
+  background: var(--surface-2); border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+tbody tr:last-child td { border-bottom: none; }
+td.mono, th.mono, td.num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+td.num { text-align: right; white-space: nowrap; }
+td.opt { white-space: nowrap; font-family: "IBM Plex Mono", monospace; font-size: 12.4px; color: var(--accent); }
+
+/* grade swatches */
+.sw { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; font-weight: 600; }
+.sw i { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+.g1 i { background: var(--w1); } .g1 { color: var(--w1); }
+.g2 i { background: var(--w2); } .g2 { color: var(--w2); }
+.g3 i { background: var(--w3); } .g3 { color: var(--w3); }
+
+/* ---------- callout ---------- */
+.note {
+  border-left: 2px solid var(--accent); background: var(--surface);
+  padding: 14px 18px; margin: 0 0 18px; border-radius: 0 5px 5px 0;
+  max-width: 68ch;
+}
+.note.warn { border-left-color: var(--w2); }
+.note p:last-child { margin-bottom: 0; }
+.note .tag {
+  font-family: "IBM Plex Mono", monospace; font-size: 10.5px; font-weight: 600;
+  letter-spacing: .11em; text-transform: uppercase; color: var(--accent);
+  display: block; margin-bottom: 4px;
+}
+.note.warn .tag { color: var(--w2); }
+
+/* ---------- figures ---------- */
+figure { margin: 22px 0 20px; }
+.figbox {
+  border: 1px solid var(--line); border-radius: 5px; background: var(--surface);
+  padding: 22px 20px; overflow-x: auto;
+}
+figure svg { display: block; width: 100%; height: auto; color: var(--ink-2); }
+#pipe-svg { min-width: 700px; }
+#branch-svg { min-width: 560px; }
+figcaption {
+  font-size: 12.5px; color: var(--muted); margin-top: 11px;
+  max-width: 66ch; line-height: 1.6;
+}
+
+/* ---------- result strip ---------- */
+.metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; margin-bottom: 20px; }
+.metric { background: var(--surface); padding: 14px 16px; }
+.metric dt { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); margin-bottom: 3px; }
+.metric dd { margin: 0; font-family: "IBM Plex Mono", monospace; font-size: 21px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; line-height: 1.25; }
+.metric dd.good { color: var(--ok); }
+
+/* ---------- screen layout map ---------- */
+.maplist { display: flex; flex-direction: column; gap: 0; margin: 0 0 18px; max-width: 68ch; }
+.maprow { display: grid; grid-template-columns: 128px 1fr; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+.maprow:last-child { border-bottom: none; }
+.maprow dt { font-family: "IBM Plex Mono", monospace; font-size: 12.3px; color: var(--accent); }
+.maprow dd { margin: 0; font-size: 14px; color: var(--ink-2); }
+
+footer {
+  max-width: 1180px; margin: 0 auto; padding: 26px 28px 60px;
+  border-top: 1px solid var(--line); font-size: 12.5px; color: var(--faint);
+  font-family: "IBM Plex Mono", monospace;
+  display: flex; flex-wrap: wrap; gap: 8px 26px;
+}
+
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; gap: 0; }
+  nav.toc {
+    position: static; padding: 26px 0 0; margin-bottom: 8px;
+    border-bottom: 1px solid var(--line); padding-bottom: 20px;
+  }
+  nav.toc ol { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px 14px; }
+  main { padding-top: 28px; }
+  .masthead-inner { padding: 34px 24px 28px; }
+  .shell, footer { padding-left: 24px; padding-right: 24px; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* ---------- print / PDF ---------- */
+@page { margin: 15mm 14mm; }
+
+@media print {
+  /* 인쇄는 항상 밝은 테마로 고정 */
+  :root {
+    --ground:#FFFFFF; --surface:#FFFFFF; --surface-2:#F4F7F9;
+    --ink:#0F1922; --ink-2:#2B3B49; --muted:#4E606D; --faint:#758794;
+    --line:#C2D0D9; --line-2:#DFE7EC; --accent:#0B5E9E; --accent-2:#EAF2F8;
+    --w1:#CF3323; --w2:#B07C05; --w3:#0E86B4;
+    --code-bg:#10202C; --code-ink:#D6E4EE; --grid:rgba(11,94,158,.10);
+  }
+  body { background:#fff; font-size: 10.4pt; line-height: 1.62; }
+
+  /* 목차는 표지 다음 한 페이지로 */
+  .shell { display: block; max-width: none; padding: 0 0 10mm; }
+  nav.toc { position: static; padding: 0 0 8mm; border-bottom: 1px solid var(--line); }
+  nav.toc ol { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+  nav.toc a { color: var(--ink-2); }
+  main { padding-top: 8mm; }
+  .masthead-inner, footer { padding-left: 0; padding-right: 0; max-width: none; }
+  .masthead { border-bottom: none; }
+
+  /* 가로 스크롤 컨테이너를 인쇄용으로 편다 */
+  .scroller, .figbox { overflow: visible !important; }
+  table { min-width: 0 !important; }
+  #pipe-svg, #branch-svg { min-width: 0 !important; }
+  pre { white-space: pre-wrap; word-break: break-word; }
+
+  /* 페이지 나눔 */
+  section { break-inside: auto; page-break-inside: auto; }
+  section + section { border-top: none; padding-top: 6mm; }
+  h1, h2, h3, h4 { break-after: avoid-page; page-break-after: avoid; }
+  figure, .note, .metrics, .maplist, .scroller, pre { break-inside: avoid; page-break-inside: avoid; }
+  ol.steps li { break-inside: avoid; page-break-inside: avoid; }
+  tr, .metric { break-inside: avoid; }
+
+  a { color: var(--ink); text-decoration: none; }
+  footer { border-top: 1px solid var(--line); color: var(--muted); }
+}
+</style>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <p class="eyebrow">Concrete to Code · 사용 설명서</p>
+    <h1>교량 균열 추출 엔진</h1>
+    <p class="standfirst">
+      드론으로 촬영한 프리캐스트 바닥판 정사영상에서, 작업자가 균열 위에 칠해 둔
+      락카 색상선을 자동으로 추출해 <strong>CAD 도면(DXF)과 좌표표(TSV)</strong>로 변환합니다.
+      소프트웨어가 균열 자체를 찾는 것이 아니라 <strong>'색상'을 인식</strong>합니다.
+    </p>
+    <dl class="facts">
+      <div class="fact"><dt>버전</dt><dd>0.1.0</dd></div>
+      <div class="fact"><dt>구성</dt><dd>엔진 + CLI + GUI</dd></div>
+      <div class="fact"><dt>입력</dt><dd>GeoTIFF</dd></div>
+      <div class="fact"><dt>출력</dt><dd>DXF · TSV · PNG</dd></div>
+      <div class="fact"><dt>런타임</dt><dd>Python 3.11+</dd></div>
+      <div class="fact"><dt>처리 속도</dt><dd>12 MP → 7초</dd></div>
+    </dl>
+  </div>
+</header>
+
+<div class="shell">
+  <nav class="toc">
+    <p>목차</p>
+    <ol>
+      <li><a href="#s1"><b>1</b><span>프로그램 개요</span></a></li>
+      <li><a href="#s2"><b>2</b><span>설치</span></a></li>
+      <li><a href="#s3"><b>3</b><span>사용법 — GUI</span></a></li>
+      <li><a href="#s4"><b>4</b><span>사용법 — CLI</span></a></li>
+      <li><a href="#s5"><b>5</b><span>기능 상세</span></a></li>
+      <li><a href="#s6"><b>6</b><span>균열 폭 등급</span></a></li>
+      <li><a href="#s7"><b>7</b><span>출력물 규격</span></a></li>
+      <li><a href="#s8"><b>8</b><span>설정 파일</span></a></li>
+      <li><a href="#s9"><b>9</b><span>검증 결과</span></a></li>
+      <li><a href="#s10"><b>10</b><span>현재 상태</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+  <!-- ============ 1 ============ -->
+  <section id="s1">
+    <h2><span class="num">1</span><span>프로그램 개요</span></h2>
+
+    <h3><span class="num">1.1</span><span>해결하는 문제</span></h3>
+    <p class="lede">
+      기존에는 현장에서 균열 폭을 자로 재고, 종이 도면에 손으로 스케치한 뒤,
+      사무실로 돌아와 CAD에 일일이 다시 옮겨 그렸습니다. 수일이 걸리고 옮겨 적는
+      과정에서 누락과 오기가 생깁니다.
+    </p>
+    <p>
+      이 프로그램은 그 과정을 <strong>드론 촬영 → 자동 추출</strong>로 바꿉니다.
+      현장 작업자는 폭을 재서 <strong>정해진 색 락카로 균열을 덧칠하기만</strong> 하면 되고,
+      나머지는 프로그램이 처리합니다.
+    </p>
+
+    <h3><span class="num">1.2</span><span>핵심 아이디어</span></h3>
+    <p>
+      균열을 직접 인식하는 것은 어려운 문제입니다. 하지만 <strong>콘크리트는 무채색이고
+      락카는 고채도</strong>이기 때문에, 색상 공간에서는 둘이 매우 뚜렷하게 갈립니다.
+      균열 탐지 문제를 색상 분리 문제로 치환해 난이도를 크게 낮춘 것이 이 설계의 핵심입니다.
+    </p>
+    <p>
+      그래서 이 엔진은 <strong>딥러닝을 쓰지 않습니다.</strong> 학습 데이터가 필요 없고,
+      결과를 설명할 수 있으며, 임계값이 사람이 읽고 조정할 수 있는 값으로 남습니다.
+      토목 검수 과정에서는 이 점이 중요합니다.
+    </p>
+
+    <h3><span class="num">1.3</span><span>처리 흐름</span></h3>
+    <figure>
+      <div class="figbox">
+        <svg id="pipe-svg" viewBox="0 0 1010 168" role="img"
+             aria-label="정사영상이 색상 분리, 노이즈 제거, 세선화와 분기 분할을 거쳐 DXF와 TSV로 변환되는 5단계 흐름도">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- boxes -->
+          <g fill="none" stroke="currentColor" stroke-width="1" opacity=".45">
+            <rect x="30"  y="52" width="150" height="72" rx="4"/>
+            <rect x="240" y="52" width="150" height="72" rx="4"/>
+            <rect x="450" y="52" width="150" height="72" rx="4"/>
+            <rect x="660" y="52" width="150" height="72" rx="4"/>
+          </g>
+          <rect x="870" y="52" width="140" height="72" rx="4" fill="none"
+                stroke="#0B5E9E" stroke-width="1.6"/>
+
+          <!-- stage numbers -->
+          <g font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".5">
+            <text x="44" y="72">01</text>
+            <text x="254" y="72">02</text>
+            <text x="464" y="72">03</text>
+            <text x="674" y="72">04</text>
+          </g>
+
+          <!-- box labels -->
+          <g font-family="IBM Plex Sans KR, sans-serif" font-size="13.5" font-weight="600"
+             fill="currentColor" text-anchor="middle">
+            <text x="105" y="95">정사영상</text>
+            <text x="315" y="95">색상 분리</text>
+            <text x="525" y="95">노이즈 제거</text>
+            <text x="735" y="95">세선화 · 분기</text>
+            <text x="940" y="95" fill="#0B5E9E">DXF / TSV</text>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor"
+             opacity=".55" text-anchor="middle">
+            <text x="105" y="112">GeoTIFF</text>
+            <text x="315" y="112">HSV inRange</text>
+            <text x="525" y="112">morphology</text>
+            <text x="735" y="112">skeletonize</text>
+          </g>
+          <text x="940" y="112" font-family="IBM Plex Mono, monospace" font-size="10"
+                fill="#0B5E9E" opacity=".8" text-anchor="middle">ezdxf</text>
+
+          <!-- arrows -->
+          <g stroke="currentColor" stroke-width="1.2" marker-end="url(#ar)" opacity=".65">
+            <line x1="180" y1="88" x2="234" y2="88"/>
+            <line x1="390" y1="88" x2="444" y2="88"/>
+            <line x1="600" y1="88" x2="654" y2="88"/>
+            <line x1="810" y1="88" x2="864" y2="88"/>
+          </g>
+          <g font-family="IBM Plex Mono, monospace" font-size="9.5" fill="currentColor"
+             opacity=".6" text-anchor="middle">
+            <text x="207" y="80">RGB 타일</text>
+            <text x="417" y="80">3색 마스크</text>
+            <text x="627" y="80">정제 마스크</text>
+            <text x="837" y="80">실좌표 선</text>
+          </g>
+
+          <!-- footnote line -->
+          <line x1="30" y1="146" x2="1010" y2="146" stroke="currentColor" stroke-width="1" opacity=".18"/>
+          <text x="30" y="162" font-family="IBM Plex Mono, monospace" font-size="10"
+                fill="currentColor" opacity=".55">
+            01–04 는 타일 단위로 처리 · 좌표 변환은 GeoTIFF 의 측량 좌표계를 그대로 사용
+          </text>
+        </svg>
+      </div>
+      <figcaption>
+        정사영상 한 장이 5단계를 거쳐 CAD 데이터가 됩니다. 각 화살표 위 표기는
+        단계 사이를 실제로 넘어가는 데이터입니다.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ============ 2 ============ -->
+  <section id="s2">
+    <h2><span class="num">2</span><span>설치</span></h2>
+
+    <h3><span class="num">2.1</span><span>요구 사항</span></h3>
+    <ul>
+      <li><strong>Python 3.11 이상</strong> (개발·검증 환경은 3.12)</li>
+      <li>Windows / macOS / Linux — 현재 검증은 Windows 11 기준</li>
+      <li>주요 의존성 — <code>numpy</code>, <code>opencv</code>, <code>scikit-image</code>,
+          <code>rasterio</code>(GeoTIFF), <code>ezdxf</code>(DXF), <code>scipy</code></li>
+      <li>GUI 를 쓸 경우 <code>PySide6</code> 추가</li>
+    </ul>
+
+    <h3><span class="num">2.2</span><span>설치 절차</span></h3>
+<pre><span class="c"># 1. 저장소 받기</span>
+git clone https://github.com/seungjaae/crack.git
+cd crack
+
+<span class="c"># 2. 가상환경 생성</span>
+py -3 -m venv .venv
+
+<span class="c"># 3. 설치 (GUI 포함)</span>
+.venv\Scripts\python -m pip install -e <span class="s">".[gui]"</span></pre>
+
+    <p>설치가 끝나면 <code>crack</code>(CLI)과 <code>crack-gui</code>(GUI) 두 명령이 등록됩니다.</p>
+
+    <h3><span class="num">2.3</span><span>설치 확인</span></h3>
+<pre><span class="c"># 검증용 합성 영상을 만들고 돌려본다</span>
+.venv\Scripts\python tools/make_synthetic.py
+.venv\Scripts\crack tests/fixtures/synthetic_deck.tif -o out
+
+<span class="c"># 정답과 대조 · 테스트</span>
+.venv\Scripts\python tools/verify.py
+.venv\Scripts\python -m pytest tests/ -q</pre>
+    <p>
+      실제 드론 데이터 없이도 동작을 확인할 수 있도록, 정답 좌표를 아는
+      합성 정사영상 생성기를 함께 넣어 두었습니다. 자세한 내용은 <a href="#s9">9장</a>에 있습니다.
+    </p>
+  </section>
+
+  <!-- ============ 3 ============ -->
+  <section id="s3">
+    <h2><span class="num">3</span><span>사용법 — GUI</span></h2>
+    <p class="lede">
+      현장 조도와 락카 상태에 따라 색상 임계값은 <strong>반드시 조정이 필요합니다.</strong>
+      GUI 는 그 조정을 위한 도구입니다. 축소본 위에서 슬라이더를 움직이면
+      검출 결과가 즉시 바뀌는 것을 보면서 값을 맞출 수 있습니다.
+    </p>
+
+    <h3><span class="num">3.1</span><span>실행</span></h3>
+<pre><span class="c"># 그냥 실행</span>
+crack-gui
+
+<span class="c"># 영상을 바로 열면서 실행</span>
+crack-gui ortho.tif</pre>
+
+    <h3><span class="num">3.2</span><span>화면 구성</span></h3>
+    <dl class="maplist">
+      <div class="maprow"><dt>상단 툴바</dt><dd>열기 · 추출 실행 · DXF/TSV 내보내기 · 보기 전환</dd></div>
+      <div class="maprow"><dt>중앙 캔버스</dt><dd>영상 표시. 원본 / 색상 마스크 / 추출 결과 세 가지 보기</dd></div>
+      <div class="maprow"><dt>우측 패널</dt><dd>색상별 임계값 탭, 노이즈 필터, 설정 저장, 등급별 집계</dd></div>
+      <div class="maprow"><dt>하단 상태바</dt><dd>영상 크기 · GSD · 좌표계 · 진행 상황</dd></div>
+    </dl>
+
+    <h3><span class="num">3.3</span><span>작업 순서</span></h3>
+    <ol class="steps">
+      <li>
+        <b>정사영상 열기</b>
+        <p>툴바의 <strong>열기</strong>로 GeoTIFF 를 선택합니다. 상태바에 영상 크기,
+           GSD(mm/픽셀), 좌표계가 표시되어 파일이 제대로 읽혔는지 바로 확인됩니다.</p>
+      </li>
+      <li>
+        <b>보기를 '색상 마스크'로 전환</b>
+        <p>현재 임계값으로 <strong>어떤 픽셀이 잡히고 있는지</strong>가 색으로 표시됩니다.
+           이 화면이 튜닝의 기준입니다.</p>
+      </li>
+      <li>
+        <b>색상별 임계값 조정</b>
+        <p>우측 탭(W1·red / W2·yellow / W3·cyan)에서 네 가지 값을 조정합니다.
+           슬라이더를 놓으면 즉시 반영됩니다.</p>
+        <div class="scroller">
+          <table>
+            <thead><tr><th>슬라이더</th><th>역할</th><th>올리면</th></tr></thead>
+            <tbody>
+              <tr><td class="opt">색상 시작 / 끝 (H)</td><td>인식할 색조 범위</td><td>다른 색조가 포함/제외됨</td></tr>
+              <tr><td class="opt">최소 채도 (S)</td><td>가장 중요한 값. 회색 콘크리트를 걸러냄</td><td>깨끗해지지만 바랜 락카를 놓칠 수 있음</td></tr>
+              <tr><td class="opt">최소 명도 (V)</td><td>어두운 픽셀 제외 기준</td><td>그늘 속 락카를 놓칠 수 있음</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>빨강은 색상환에서 H=0 을 감싸고 돌기 때문에 구간이 둘로 나뉩니다.
+           <strong>시작 &gt; 끝</strong>으로 두면 자동으로 감싸는 구간이 됩니다.</p>
+      </li>
+      <li>
+        <b>노이즈 필터 조정</b>
+        <p><strong>최소 길이</strong>(이보다 짧으면 버림)와
+           <strong>최소 세장비</strong>(길이÷폭, 뭉툭한 것은 버림)를 맞춥니다.
+           낙엽·흙 얼룩은 세장비에서 걸러집니다.</p>
+      </li>
+      <li>
+        <b>추출 실행</b>
+        <p>확정된 값으로 <strong>원본 해상도</strong> 처리를 돌립니다. 별도 스레드에서
+           동작해 화면이 멈추지 않습니다. 끝나면 자동으로 '추출 결과' 보기로 전환되고
+           우측에 등급별 개수와 총연장이 표시됩니다.</p>
+      </li>
+      <li>
+        <b>내보내기</b>
+        <p><strong>DXF / TSV 내보내기</strong>로 폴더를 지정해 저장합니다.</p>
+      </li>
+      <li>
+        <b>임계값 저장</b>
+        <p><strong>현재 임계값을 설정 파일에 저장</strong>을 누르면
+           <code>config/default.toml</code> 에 반영됩니다. 다음부터는 CLI 로 같은 값이
+           자동 적용되므로, <strong>한 번 튜닝하면 이후 배치 처리에 그대로 쓸 수 있습니다.</strong></p>
+      </li>
+    </ol>
+  </section>
+
+  <!-- ============ 4 ============ -->
+  <section id="s4">
+    <h2><span class="num">4</span><span>사용법 — CLI</span></h2>
+    <p class="lede">
+      임계값이 확정된 뒤 여러 영상을 반복 처리할 때 씁니다. 자동화 스크립트나
+      야간 배치에 그대로 넣을 수 있습니다.
+    </p>
+
+    <h3><span class="num">4.1</span><span>기본 실행</span></h3>
+<pre>crack ortho.tif -o out</pre>
+    <p>출력 폴더에 DXF, TSV, 검수용 미리보기 PNG 세 개가 생성됩니다.</p>
+
+    <h3><span class="num">4.2</span><span>옵션 전체</span></h3>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>옵션</th><th>설명</th><th>기본값</th></tr></thead>
+        <tbody>
+          <tr><td class="opt">image</td><td>입력 정사영상 (필수)</td><td class="mono">—</td></tr>
+          <tr><td class="opt">-c, --config</td><td>설정 TOML 경로</td><td class="mono">config/default.toml</td></tr>
+          <tr><td class="opt">-o, --out-dir</td><td>출력 폴더</td><td class="mono">out</td></tr>
+          <tr><td class="opt">--prefix</td><td>출력 파일명 접두사</td><td class="mono">입력 파일명</td></tr>
+          <tr><td class="opt">--tile-size</td><td>타일 한 변 픽셀 수</td><td class="mono">4096</td></tr>
+          <tr><td class="opt">--no-dxf</td><td>DXF 출력 생략</td><td class="mono">off</td></tr>
+          <tr><td class="opt">--no-tsv</td><td>TSV 출력 생략</td><td class="mono">off</td></tr>
+          <tr><td class="opt">--no-preview</td><td>미리보기 PNG 생략</td><td class="mono">off</td></tr>
+          <tr><td class="opt">-q, --quiet</td><td>진행 로그 숨김</td><td class="mono">off</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3><span class="num">4.3</span><span>실행 결과 예시</span></h3>
+<pre>영상: 4000 x 3000 px (12.0 MP), GSD 0.500 mm/px
+좌표계: EPSG:5186
+색상 분리 중...
+[W1] red 처리 중...     세그먼트 2개 채택 (후보 15개)
+[W2] yellow 처리 중...  세그먼트 1개 채택 (후보 3개)
+[W3] cyan 처리 중...    세그먼트 3개 채택 (후보 3개)
+
+등급별 집계
+────────────────────────────────────────────
+  W1 (red    0.1mm이상 0.2mm이하)   2 개    1.43 m
+  W2 (yellow 0.2mm초과 0.3mm이하)   1 개    1.04 m
+  W3 (cyan   0.3mm초과)             3 개    1.18 m
+────────────────────────────────────────────
+  합계                              6 개    3.65 m
+  노이즈로 제외: 짧음 15
+  처리 시간: 7.2s</pre>
+    <p>
+      <strong>후보</strong>는 색상은 맞았지만 기하 필터에서 탈락한 것을 포함한 수입니다.
+      위 예시에서 빨강 후보 15개 중 13개가 낙엽·얼룩으로 걸러졌습니다.
+    </p>
+  </section>
+
+  <!-- ============ 5 ============ -->
+  <section id="s5">
+    <h2><span class="num">5</span><span>기능 상세</span></h2>
+
+    <h3><span class="num">5.1</span><span>정밀 색상 분리</span></h3>
+    <p>
+      RGB 가 아닌 <strong>HSV 색공간</strong>에서 분리합니다. RGB 로는 조도가 바뀌면
+      값이 통째로 흔들리지만, HSV 는 색조(H)·채도(S)·명도(V)가 분리되어 있어
+      <strong>그늘에 들어간 락카도 같은 색조로 인식</strong>됩니다.
+    </p>
+    <p>
+      콘크리트는 채도가 거의 0 이므로, 채도 하한선 하나만으로도 배경의 대부분이 탈락합니다.
+      빨강처럼 색상환의 0 을 감싸는 색은 구간을 둘로 나누어 처리합니다.
+    </p>
+
+    <h3><span class="num">5.2</span><span>노이즈 제거 — 3단계</span></h3>
+    <p>그림자, 타이어 자국, 흙 얼룩, 낙엽을 선과 구분해 걸러냅니다.</p>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>단계</th><th>방법</th><th>걸러내는 것</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">1 · 색상</td><td>채도·명도 하한선</td><td>무채색 콘크리트, 그림자, 타이어 자국</td></tr>
+          <tr><td class="mono">2 · 형태</td><td>모폴로지 열림/닫힘 + 최소 면적</td><td>점 노이즈. 끊긴 선은 반대로 이어 붙임</td></tr>
+          <tr><td class="mono">3 · 기하</td><td>최소 길이 + <strong>세장비</strong>(길이÷폭)</td><td>낙엽, 흙 얼룩처럼 뭉툭한 것</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note warn">
+      <span class="tag">현장 튜닝 시 참고</span>
+      <p>
+        검증 과정에서 확인된 사실입니다 — <strong>면적 필터는 낙엽을 거의 걸러내지 못합니다.</strong>
+        낙엽은 면적만 보면 충분히 큽니다. 실제로 오검출을 막는 것은
+        <strong>3단계 세장비 필터</strong>입니다. 오검출이 나오면 이 값을 먼저 조정하십시오.
+      </p>
+    </div>
+
+    <h3><span class="num">5.3</span><span>벡터화 및 분기 분할</span></h3>
+    <p>
+      균열은 나뭇가지처럼 갈라집니다. 갈래를 하나의 선으로 뭉뚱그리면 길이가 왜곡되므로,
+      <strong>분기점에서 끊어 각 가지를 독립 세그먼트로</strong> 만듭니다.
+    </p>
+
+    <figure>
+      <div class="figbox">
+        <svg id="branch-svg" viewBox="0 0 760 268" role="img"
+             aria-label="Y자로 갈라진 균열이 세선화와 분기점 검출을 거쳐 세 개의 독립 세그먼트로 분할되고 각각의 길이가 측정되는 과정">
+          <defs>
+            <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 10 5 L 0 9 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- panel A : painted crack -->
+          <g transform="translate(10,0)">
+            <g stroke="#0E86B4" stroke-width="15" stroke-linecap="round" fill="none">
+              <path d="M 35 44 L 100 140"/>
+              <path d="M 168 50 L 100 140"/>
+              <path d="M 100 140 L 114 232"/>
+            </g>
+            <text x="100" y="258" text-anchor="middle" font-size="12"
+                  font-family="IBM Plex Sans KR, sans-serif" fill="currentColor">칠해진 균열</text>
+          </g>
+
+          <line x1="228" y1="140" x2="268" y2="140" stroke="currentColor"
+                stroke-width="1.2" marker-end="url(#ar2)" opacity=".6"/>
+
+          <!-- panel B : skeleton + junction -->
+          <g transform="translate(275,0)">
+            <g stroke="#0E86B4" stroke-width="15" stroke-linecap="round"
+               fill="none" opacity=".16">
+              <path d="M 35 44 L 100 140"/>
+              <path d="M 168 50 L 100 140"/>
+              <path d="M 100 140 L 114 232"/>
+            </g>
+            <g stroke="currentColor" stroke-width="1.6" fill="none">
+              <path d="M 35 44 L 100 140"/>
+              <path d="M 168 50 L 100 140"/>
+              <path d="M 100 140 L 114 232"/>
+            </g>
+            <circle cx="100" cy="140" r="7" fill="none" stroke="#CF3323" stroke-width="2.2"/>
+            <text x="118" y="132" font-size="10.5" font-family="IBM Plex Mono, monospace"
+                  fill="#CF3323">junction</text>
+            <text x="100" y="258" text-anchor="middle" font-size="12"
+                  font-family="IBM Plex Sans KR, sans-serif" fill="currentColor">세선화 + 분기점 검출</text>
+          </g>
+
+          <line x1="493" y1="140" x2="533" y2="140" stroke="currentColor"
+                stroke-width="1.2" marker-end="url(#ar2)" opacity=".6"/>
+
+          <!-- panel C : split segments -->
+          <g transform="translate(540,0)">
+            <g stroke="#0E86B4" stroke-width="4.5" stroke-linecap="round" fill="none">
+              <path d="M 35 44 L 88 122"/>
+              <path d="M 168 50 L 112 124"/>
+              <path d="M 103 156 L 114 232"/>
+            </g>
+            <g font-family="IBM Plex Mono, monospace" font-size="10" fill="currentColor" opacity=".8">
+              <text x="4" y="86">L=360</text>
+              <text x="150" y="92">L=358</text>
+              <text x="122" y="200">L=461</text>
+            </g>
+            <text x="100" y="258" text-anchor="middle" font-size="12"
+                  font-family="IBM Plex Sans KR, sans-serif" fill="currentColor">3개 세그먼트로 분할</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        Y자로 갈라진 균열 하나는 출력에서 <strong>3개의 행</strong>이 됩니다. 세 세그먼트는
+        같은 색(=같은 폭 등급)이지만 길이는 각각 따로 측정됩니다. 단위는 mm.
+      </figcaption>
+    </figure>
+
+    <h4>길이(L)의 정의</h4>
+    <ul>
+      <li>시작점–끝점 직선거리가 아니라 <strong>균열을 따라간 실연장</strong>입니다.</li>
+      <li>세선화 결과의 계단 현상은 폴리라인 단순화(RDP)로 정리한 뒤 측정합니다.</li>
+      <li>분기점에 붙는 짧은 잔가지(spur)는 세선화 부산물이므로 자동으로 제거합니다.</li>
+    </ul>
+
+    <h3><span class="num">5.4</span><span>실좌표 변환</span></h3>
+    <p>
+      GeoTIFF 에 들어 있는 <strong>측량 좌표계를 그대로 사용</strong>합니다(예: EPSG:5186 중부원점).
+      정사영상 합성 단계에서 이미 정위치가 끝나 있으므로, <strong>별도의 좌표 맞추기 작업이 필요 없습니다.</strong>
+      추출된 선의 좌표가 곧 실제 교량 위의 물리적 위치입니다.
+    </p>
+    <p>
+      좌표계 단위(미터·밀리미터·피트)를 읽어 mm 로 환산하므로 길이 값은 항상 mm 로 나옵니다.
+      좌표계가 없는 일반 TIFF 는 설정의 <code>fallback_gsd_mm</code> 을 써서 픽셀 좌표로 처리합니다.
+    </p>
+
+    <h3><span class="num">5.5</span><span>대용량 영상 타일 처리</span></h3>
+    <p>
+      GSD 0.5 mm 에서는 <strong>8 m × 2 m 바닥판 하나가 이미 6,400만 화소</strong>입니다.
+      경간 전체라면 수억 화소가 됩니다. 원본 RGB 를 통째로 메모리에 올리면 감당이 안 되므로,
+      영상을 타일로 나누어 읽고 화소당 1바이트짜리 등급 라벨맵으로 축약해 누적합니다
+      (RGB 대비 1/3 메모리).
+    </p>
+    <p>
+      타일 경계에서 모폴로지 연산이 깨지지 않도록 <strong>겹침 여백</strong>을 두고 읽은 뒤
+      중심 영역만 채택합니다. 면적 필터는 타일이 아니라 <strong>영상 전체를 조립한 뒤</strong>
+      한 번에 적용하므로, 타일에 걸친 큰 덩어리가 잘못 잘려 나가지 않습니다.
+    </p>
+  </section>
+
+  <!-- ============ 6 ============ -->
+  <section id="s6">
+    <h2><span class="num">6</span><span>균열 폭 등급</span></h2>
+    <p class="lede">
+      현장에서는 균열 폭을 재서 아래 색으로 덧칠합니다.
+      <strong>0.1 mm 미만은 균열로 보지 않으므로 칠하지 않습니다.</strong>
+    </p>
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>등급</th><th>기준 폭</th><th>락카 색</th><th>DXF 레이어</th><th class="mono">색 번호</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono"><strong>W1</strong></td><td>0.1 mm 이상 ~ 0.2 mm 이하</td>
+            <td><span class="sw g1"><i></i>Red</span></td>
+            <td class="mono">CRACK_W1_0.1-0.2</td><td class="num">1</td>
+          </tr>
+          <tr>
+            <td class="mono"><strong>W2</strong></td><td>0.2 mm 초과 ~ 0.3 mm 이하</td>
+            <td><span class="sw g2"><i></i>Yellow</span></td>
+            <td class="mono">CRACK_W2_0.2-0.3</td><td class="num">2</td>
+          </tr>
+          <tr>
+            <td class="mono"><strong>W3</strong></td><td>0.3 mm 초과</td>
+            <td><span class="sw g3"><i></i>Cyan</span></td>
+            <td class="mono">CRACK_W3_0.3-</td><td class="num">4</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      <span class="tag">설계 결정</span>
+      <p>
+        <strong>색상과 등급의 짝은 코드에 박혀 있지 않습니다.</strong> 설정 파일에서 바꿀 수 있으므로,
+        현장 색상 규칙이 바뀌거나 락카 재고 사정으로 색을 교체해도
+        프로그램은 수정할 필요가 없습니다.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ 7 ============ -->
+  <section id="s7">
+    <h2><span class="num">7</span><span>출력물 규격</span></h2>
+
+    <h3><span class="num">7.1</span><span>DXF — CAD 도면</span></h3>
+    <ul>
+      <li><strong>AutoCAD 2010(AC1024) 이상</strong> 호환</li>
+      <li>균열 하나가 <code>LWPOLYLINE</code> 하나. 좌표는 실측 좌표계</li>
+      <li><strong>등급별로 레이어 분리</strong> — 특정 등급만 켜고 끌 수 있음</li>
+      <li>길이 텍스트(<code>W1 L=1130mm</code>)를 균열 중앙에 선 방향으로 회전해 배치</li>
+      <li>텍스트는 <strong>별도 레이어</strong>(<code>..._TEXT</code>)라 도면에서 한 번에 끌 수 있음</li>
+      <li>도면 단위는 좌표계에 맞춰 자동 설정(미터 좌표계면 미터)</li>
+    </ul>
+
+    <h3><span class="num">7.2</span><span>TSV — 좌표·수량 표</span></h3>
+    <p>탭 구분 텍스트라 엑셀에서 바로 열립니다. 열 구성은 다음과 같습니다.</p>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>열</th><th>내용</th></tr></thead>
+        <tbody>
+          <tr><td class="opt">id</td><td>세그먼트 일련번호</td></tr>
+          <tr><td class="opt">grade</td><td>등급 (W1 / W2 / W3)</td></tr>
+          <tr><td class="opt">grade_label</td><td>등급 설명 (예: 0.1mm이상 0.2mm이하)</td></tr>
+          <tr><td class="opt">color</td><td>인식된 락카 색</td></tr>
+          <tr><td class="opt">length_mm</td><td><strong>균열을 따라간 실연장</strong> (mm)</td></tr>
+          <tr><td class="opt">paint_width_mm</td><td>칠 자국의 폭. 검수용 참고값</td></tr>
+          <tr><td class="opt">start_x / start_y</td><td>시작점 실좌표</td></tr>
+          <tr><td class="opt">end_x / end_y</td><td>끝점 실좌표</td></tr>
+          <tr><td class="opt">vertices</td><td>폴리라인 정점 수</td></tr>
+          <tr><td class="opt">wkt</td><td>전체 형상 (<code>LINESTRING</code>). GIS 에서 바로 사용</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      <span class="tag">주의</span>
+      <p>
+        <code>paint_width_mm</code> 은 <strong>락카 자국의 폭</strong>(약 10 mm)이지
+        균열 자체의 폭이 아닙니다. 균열 폭 정보는 <code>grade</code> 열이 담고 있습니다.
+      </p>
+    </div>
+
+    <h3><span class="num">7.3</span><span>미리보기 PNG — 검수용</span></h3>
+    <p>
+      원본을 어둡게 깔고 추출된 선을 겹쳐 그린 이미지입니다. CAD 를 열지 않고도
+      <strong>빠뜨린 균열이나 잘못 잡힌 선이 없는지 한눈에 확인</strong>할 수 있습니다.
+    </p>
+  </section>
+
+  <!-- ============ 8 ============ -->
+  <section id="s8">
+    <h2><span class="num">8</span><span>설정 파일</span></h2>
+    <p class="lede">
+      모든 조정값은 <code>config/default.toml</code> 한 곳에 모여 있습니다.
+      <strong>코드를 수정할 일이 없도록</strong> 설계했습니다.
+    </p>
+    <div class="scroller">
+      <table>
+        <thead><tr><th>블록</th><th>내용</th><th>대표 항목</th></tr></thead>
+        <tbody>
+          <tr><td class="opt">[project]</td><td>좌표계 없는 영상용 대체 GSD</td><td class="mono">fallback_gsd_mm</td></tr>
+          <tr><td class="opt">[colors.*]</td><td>색상별 HSV 인식 범위</td><td class="mono">hsv_ranges</td></tr>
+          <tr><td class="opt">[[grades]]</td><td>등급 정의와 색상 매핑, 레이어 이름</td><td class="mono">color, layer, min_mm</td></tr>
+          <tr><td class="opt">[denoise]</td><td>노이즈 필터 임계값</td><td class="mono">min_length_mm, min_elongation</td></tr>
+          <tr><td class="opt">[vectorize]</td><td>폴리라인 단순화, 잔가지 제거</td><td class="mono">rdp_epsilon_px, prune_spur_px</td></tr>
+          <tr><td class="opt">[export]</td><td>DXF 버전, 텍스트 병기, 구분자</td><td class="mono">dxf_version, text_height_mm</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      설정은 읽을 때 <strong>검증</strong>합니다. 정의되지 않은 색을 참조하거나 한 색이
+      두 등급에 중복 매핑되면 실행을 거부하고 원인을 알려줍니다.
+    </p>
+  </section>
+
+  <!-- ============ 9 ============ -->
+  <section id="s9">
+    <h2><span class="num">9</span><span>검증 결과</span></h2>
+    <p class="lede">
+      실제 드론 데이터 수령 전이라, <strong>정답 좌표를 아는 합성 정사영상</strong>으로 검증했습니다.
+      콘크리트 질감 위에 그림자·타이어 자국·흙 얼룩·낙엽을 깔고,
+      Y자 분기를 포함한 3색 균열을 그려 넣었습니다.
+    </p>
+
+    <dl class="metrics">
+      <div class="metric"><dt>검출률</dt><dd class="good">6 / 6</dd></div>
+      <div class="metric"><dt>평균 절대오차</dt><dd class="good">0.62 %</dd></div>
+      <div class="metric"><dt>최대 오차</dt><dd>1.54 %</dd></div>
+      <div class="metric"><dt>오검출</dt><dd class="good">0 건</dd></div>
+      <div class="metric"><dt>자동 테스트</dt><dd>20 통과</dd></div>
+    </dl>
+
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr><th>정답 ID</th><th>색상</th><th class="mono">정답 (mm)</th><th class="mono">측정 (mm)</th><th class="mono">오차</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="mono">1</td><td><span class="sw g1"><i></i>red</span></td><td class="num">650.0</td><td class="num">648.6</td><td class="num">−0.22 %</td></tr>
+          <tr><td class="mono">2</td><td><span class="sw g1"><i></i>red</span></td><td class="num">777.8</td><td class="num">777.1</td><td class="num">−0.09 %</td></tr>
+          <tr><td class="mono">3</td><td><span class="sw g2"><i></i>yellow</span></td><td class="num">1041.6</td><td class="num">1041.5</td><td class="num">−0.01 %</td></tr>
+          <tr><td class="mono">4</td><td><span class="sw g3"><i></i>cyan</span></td><td class="num">360.6</td><td class="num">366.1</td><td class="num">+1.54 %</td></tr>
+          <tr><td class="mono">5</td><td><span class="sw g3"><i></i>cyan</span></td><td class="num">357.9</td><td class="num">352.9</td><td class="num">−1.41 %</td></tr>
+          <tr><td class="mono">6</td><td><span class="sw g3"><i></i>cyan</span></td><td class="num">461.0</td><td class="num">458.8</td><td class="num">−0.47 %</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      4·5·6번은 <a href="#s5">5.3</a>의 Y자 분기가 쪼개진 세 세그먼트입니다.
+      분기점 처리 때문에 오차가 조금 크지만 1.6 % 이내입니다.
+      타이어 자국을 가로지르는 균열도 끊김 없이 추적되었습니다.
+    </p>
+  </section>
+
+  <!-- ============ 10 ============ -->
+  <section id="s10">
+    <h2><span class="num">10</span><span>현재 상태와 다음 단계</span></h2>
+
+    <h3><span class="num">10.1</span><span>완료된 것</span></h3>
+    <ul>
+      <li>색상 분리 → 노이즈 제거 → 벡터화 → DXF/TSV 출력 <strong>전 구간 동작</strong></li>
+      <li>실측 좌표계 그대로 사용, 분기 단위 길이 측정</li>
+      <li>임계값 튜닝 GUI, 배치용 CLI, 자동 테스트 20건</li>
+      <li>대용량 영상 타일 처리</li>
+    </ul>
+
+    <h3><span class="num">10.2</span><span>아직 확정되지 않은 것</span></h3>
+    <div class="note warn">
+      <span class="tag">중요</span>
+      <p>
+        <strong>설정 파일의 색상 임계값은 합성 데이터 기준의 '출발점' 값입니다.</strong>
+        실제 현장 조도, 락카 변색, 젖은 노면에서는 반드시 재조정이 필요합니다.
+        이 값을 검증 완료된 설정으로 오해하면 검출률이 떨어집니다.
+        GUI 를 먼저 만든 이유가 이것입니다.
+      </p>
+    </div>
+    <ul>
+      <li><strong>실제 드론 정사영상</strong> — 1~2장이면 임계값 튜닝을 시작할 수 있습니다.</li>
+      <li><strong>바닥판 실제 치수</strong> — 영상의 픽셀 크기를 알아야 타일 크기를 맞출 수 있습니다.</li>
+      <li><strong>PoC 납기</strong> — 우선순위 조정에 필요합니다.</li>
+    </ul>
+  </section>
+
+  </main>
+</div>
+
+<footer>
+  <span>Concrete to Code · Bridge Crack Extraction Engine v0.1.0</span>
+  <span>github.com/seungjaae/crack</span>
+</footer>
