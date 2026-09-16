@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import config as config_mod
-from . import export, pipeline, segment, stats
+from . import export, girder, pipeline, segment, stats
 from .config import SORT_KEYS, ColorSpec, Config
 from .model import CrackSegment
 from .raster import Raster, open_raster, read_overview
@@ -212,6 +212,24 @@ class ExtractWorker(QThread):
             self.failed.emit(str(e))
 
 
+class GirderWorker(QThread):
+    """거더 검출도 큰 영상에선 수 초 걸리므로 별도 스레드에서."""
+
+    finished_ok = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, raster: Raster, cfg: Config):
+        super().__init__()
+        self.raster = raster
+        self.cfg = cfg
+
+    def run(self) -> None:
+        try:
+            self.finished_ok.emit(girder.detect(self.raster, self.cfg))
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(str(e))
+
+
 class MainWindow(QMainWindow):
     def __init__(self, cfg: Config, config_path: Path | None):
         super().__init__()
@@ -232,6 +250,10 @@ class MainWindow(QMainWindow):
         # 놓친 선 직접 그리기
         self.drawing = False
         self.draw_pts: list[tuple[float, float]] = []   # 미리보기 좌표
+
+        # 거더
+        self.girders: list = []
+        self.gworker: GirderWorker | None = None
 
         self.setWindowTitle("Concrete to Code — 균열 추출 엔진")
         self.resize(1400, 900)
@@ -270,6 +292,11 @@ class MainWindow(QMainWindow):
         self.act_run.triggered.connect(self.run_extract)
         self.act_run.setEnabled(False)
         tb.addAction(self.act_run)
+
+        self.act_girders = QAction("거더 검출", self)
+        self.act_girders.triggered.connect(self.run_girders)
+        self.act_girders.setEnabled(False)
+        tb.addAction(self.act_girders)
 
         self.act_export = QAction("DXF / TSV 내보내기", self)
         self.act_export.triggered.connect(self.export_results)
@@ -359,6 +386,10 @@ class MainWindow(QMainWindow):
             cb.stateChanged.connect(self._refresh_canvas)
             self.vis[grade.id] = cb
             vlay.addWidget(cb)
+        self.vis_girder = QCheckBox("거더")
+        self.vis_girder.setChecked(True)
+        self.vis_girder.stateChanged.connect(self._refresh_canvas)
+        vlay.addWidget(self.vis_girder)
         lay.addWidget(vis_box)
 
         # ---- 잘못 추출된 선 제거 ----
@@ -490,20 +521,25 @@ class MainWindow(QMainWindow):
 
     def _refresh_stats(self) -> None:
         """정렬 기준이나 길이 구간이 바뀌면 재추출 없이 분석만 다시 한다."""
-        if self.result is None:
+        if self.result is None and not self.girders:
             return
         cfg = self.current_config()
-        segs = stats.sort_segments(self.active_segments(), cfg)
-        text = stats.format_report(stats.analyze(segs, cfg), cfg)
-        notes = []
-        if self.removed:
-            notes.append(f"사용자가 삭제한 선 {len(self.removed)}개는 제외된 값입니다.")
-        n_manual = sum(1 for s in segs if s.source == "manual")
-        if n_manual:
-            notes.append(f"직접 그려 넣은 선 {n_manual}개가 포함되어 있습니다.")
-        if notes:
-            text += "\n\n" + "\n".join(f"  * {n}" for n in notes)
-        self.stats.setPlainText(text)
+        parts = []
+        if self.result is not None:
+            segs = stats.sort_segments(self.active_segments(), cfg)
+            text = stats.format_report(stats.analyze(segs, cfg), cfg)
+            notes = []
+            if self.removed:
+                notes.append(f"사용자가 삭제한 선 {len(self.removed)}개는 제외된 값입니다.")
+            n_manual = sum(1 for s in segs if s.source == "manual")
+            if n_manual:
+                notes.append(f"직접 그려 넣은 선 {n_manual}개가 포함되어 있습니다.")
+            if notes:
+                text += "\n\n" + "\n".join(f"  * {n}" for n in notes)
+            parts.append(text)
+        if self.girders:
+            parts.append(export.summarize_girders(self.girders))
+        self.stats.setPlainText("\n\n".join(parts))
 
     # -------------------------------------------------------- 선 편집
     def _build_preview_pts(self) -> None:
@@ -698,7 +734,9 @@ class MainWindow(QMainWindow):
             return
 
         self.result = None
+        self.girders = []
         self.act_run.setEnabled(True)
+        self.act_girders.setEnabled(True)
         self.act_export.setEnabled(False)
         crs = self.raster.crs if self.raster.georeferenced else "좌표계 없음"
         self.statusBar().showMessage(
@@ -743,33 +781,72 @@ class MainWindow(QMainWindow):
         self.act_run.setEnabled(True)
         QMessageBox.critical(self, "추출 실패", msg)
 
+    # ------------------------------------------------------------ 거더
+    def run_girders(self) -> None:
+        if self.raster is None or self.gworker is not None:
+            return
+        self.act_girders.setEnabled(False)
+        self.statusBar().showMessage("거더 검출 중...")
+        self.gworker = GirderWorker(self.raster, self.current_config())
+        self.gworker.finished_ok.connect(self._girders_done)
+        self.gworker.failed.connect(self._girders_failed)
+        self.gworker.start()
+
+    def _girders_done(self, girders) -> None:
+        self.girders = list(girders)
+        self.gworker = None
+        self.act_girders.setEnabled(True)
+        # 균열 추출 전이라도 거더만 내보낼 수 있게 한다
+        self.act_export.setEnabled(True)
+        self.view_mode.setCurrentIndex(2)
+        self.vis_girder.setChecked(True)
+        self._refresh_stats()
+        self._refresh_canvas()
+        if self.girders:
+            self.statusBar().showMessage(
+                f"거더 {len(self.girders)}개 검출 — "
+                f"폭 {self.girders[0].width_mm:.0f} mm, "
+                f"길이 {np.median([g.length_mm for g in self.girders]):.0f} mm"
+            )
+        else:
+            self.statusBar().showMessage(
+                "거더를 찾지 못했습니다. 평행한 밝은 띠가 있는 영상인지 확인하세요."
+            )
+
+    def _girders_failed(self, msg: str) -> None:
+        self.gworker = None
+        self.act_girders.setEnabled(True)
+        QMessageBox.critical(self, "거더 검출 실패", msg)
+
     def export_results(self) -> None:
-        if self.result is None:
+        if self.raster is None or (self.result is None and not self.girders):
             return
         out_dir = QFileDialog.getExistingDirectory(self, "저장 폴더 선택", "")
         if not out_dir:
             return
         cfg = self.current_config()
         prefix = self.raster.path.stem
-        segs = stats.sort_segments(self.active_segments(), cfg)
-        summary = stats.analyze(segs, cfg)
+        out = Path(out_dir)
+        # 균열 추출 전이면 빈 목록으로 거더만 내보낸다
+        segs = stats.sort_segments(self.active_segments(), cfg) if self.result else []
         try:
             paths = [
-                export.write_dxf(
-                    segs, cfg, self.result.raster, Path(out_dir) / f"{prefix}.dxf"
-                ),
-                export.write_tsv(segs, cfg, Path(out_dir) / f"{prefix}.tsv"),
-                export.write_stats_tsv(
-                    summary, cfg, Path(out_dir) / f"{prefix}_stats.tsv"
-                ),
-                export.write_preview(
-                    segs, cfg, self.result.raster,
-                    Path(out_dir) / f"{prefix}_preview.png",
-                ),
+                export.write_dxf(segs, cfg, self.raster, out / f"{prefix}.dxf",
+                                 girders=self.girders),
             ]
-            paths += export.write_previews_by_color(
-                segs, cfg, self.result.raster, Path(out_dir), prefix
-            )
+            if self.girders:
+                paths.append(export.write_girders_tsv(
+                    self.girders, cfg, out / f"{prefix}_girders.tsv"))
+            if self.result is not None:
+                summary = stats.analyze(segs, cfg)
+                paths += [
+                    export.write_tsv(segs, cfg, out / f"{prefix}.tsv"),
+                    export.write_stats_tsv(summary, cfg, out / f"{prefix}_stats.tsv"),
+                    export.write_preview(segs, cfg, self.raster,
+                                         out / f"{prefix}_preview.png"),
+                ]
+                paths += export.write_previews_by_color(
+                    segs, cfg, self.raster, out, prefix)
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "내보내기 실패", str(e))
             return
@@ -817,10 +894,27 @@ class MainWindow(QMainWindow):
             out[mask > 0] = OVERLAY_RGB.get(grade.color, (255, 255, 255))
         return out
 
+    def _draw_girders(self, out: np.ndarray) -> None:
+        """거더는 초록 사각형으로. 균열선과 헷갈리지 않게 색을 달리한다."""
+        if not self.girders or not self.vis_girder.isChecked():
+            return
+        for g in self.girders:
+            pts = np.round(g.points_px * self.preview_scale).astype(np.int32)
+            cv2.polylines(out, [pts], True, (80, 230, 120), 2, cv2.LINE_AA)
+            c = pts.mean(axis=0).astype(int)
+            cv2.putText(out, f"G{g.id}", (int(c[0]) - 10, int(c[1])),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (80, 230, 120), 2, cv2.LINE_AA)
+
     def _result_overlay(self) -> np.ndarray:
-        if self.result is None or self.raster is None:
+        if self.raster is None:
             return self.preview_rgb
+        if self.result is None:
+            # 균열 추출 전에 거더만 검출한 경우
+            out = (self.preview_rgb * 0.4).astype(np.uint8)
+            self._draw_girders(out)
+            return out
         out = (self.preview_rgb * 0.4).astype(np.uint8)
+        self._draw_girders(out)
         visible = {g.id for g in self.cfg.grades if self.vis[g.id].isChecked()}
 
         def draw(sid, color, thickness):
