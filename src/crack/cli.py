@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import config as config_mod
-from . import export, pipeline, stats
+from . import export, girder, pipeline, stats
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +24,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-dxf", action="store_true", help="DXF 출력 생략")
     p.add_argument("--no-tsv", action="store_true", help="TSV 출력 생략")
     p.add_argument("--no-preview", action="store_true", help="미리보기 PNG 생략")
+    p.add_argument(
+        "--girders",
+        action="store_true",
+        help="거더도 함께 검출해 DXF 레이어와 TSV 로 낸다",
+    )
     p.add_argument(
         "--preview-by-color",
         action="store_true",
@@ -71,9 +76,18 @@ def main(argv: list[str] | None = None) -> int:
     prefix = args.prefix or Path(args.image).stem
     written: list[Path] = []
 
+    girders = []
+    if args.girders:
+        progress("거더 검출 중...")
+        girders = girder.detect(result.raster, cfg)
+        progress(f"  거더 {len(girders)}개")
+
     if not args.no_dxf:
         written.append(export.write_dxf(segments, cfg, result.raster,
-                                       out_dir / f"{prefix}.dxf"))
+                                       out_dir / f"{prefix}.dxf", girders=girders))
+    if girders:
+        written.append(export.write_girders_tsv(
+            girders, cfg, out_dir / f"{prefix}_girders.tsv"))
     if not args.no_tsv:
         written.append(export.write_tsv(segments, cfg, out_dir / f"{prefix}.tsv"))
     if not args.no_stats:

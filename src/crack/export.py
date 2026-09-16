@@ -65,8 +65,12 @@ def write_dxf(
     cfg: Config,
     raster: Raster,
     out_path: str | Path,
+    girders=None,
 ) -> Path:
-    """색상(등급)별 레이어로 분리된 DXF 를 쓴다."""
+    """색상(등급)별 레이어로 분리된 DXF 를 쓴다.
+
+    girders 를 주면 별도 레이어로 함께 넣는다.
+    """
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -96,6 +100,9 @@ def write_dxf(
                 rotation=angle,
                 dxfattribs={"layer": seg.layer + cfg.export.text_layer_suffix},
             ).set_placement((x, y + text_height * 0.3))
+
+    if girders:
+        add_girders_to_dxf(doc, girders, cfg, raster)
 
     doc.saveas(out)
     return out
@@ -263,3 +270,64 @@ def write_stats_tsv(
             ] + [b.by_grade.get(gid, 0) for gid in grade_ids]))
 
     return out
+
+
+GIRDER_LAYER = "GIRDER"
+GIRDER_COLUMNS = [
+    "id", "width_mm", "length_mm", "support",
+    "c1_x", "c1_y", "c2_x", "c2_y", "c3_x", "c3_y", "c4_x", "c4_y", "wkt",
+]
+
+
+def write_girders_tsv(girders, cfg: Config, out_path: str | Path) -> Path:
+    """거더 꼭짓점 좌표표."""
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    d = cfg.export.tsv_delimiter
+    with out.open("w", encoding="utf-8-sig", newline="") as fh:
+        fh.write(d.join(GIRDER_COLUMNS) + "\n")
+        for g in girders:
+            cells = [str(g.id), f"{g.width_mm:.1f}", f"{g.length_mm:.1f}",
+                     f"{g.support:.0f}"]
+            for x, y in g.points_world:
+                cells += [f"{x:.4f}", f"{y:.4f}"]
+            cells.append(g.wkt())
+            fh.write(d.join(cells) + "\n")
+    return out
+
+
+def add_girders_to_dxf(doc, girders, cfg: Config, raster: Raster) -> None:
+    """이미 만들어진 DXF 문서에 거더 레이어를 얹는다."""
+    if GIRDER_LAYER not in doc.layers:
+        doc.layers.add(name=GIRDER_LAYER, color=3)     # 3 = green
+    text_layer = GIRDER_LAYER + cfg.export.text_layer_suffix
+    if cfg.export.write_text and text_layer not in doc.layers:
+        doc.layers.add(name=text_layer, color=3)
+
+    msp = doc.modelspace()
+    height = raster.mm_to_world_len(cfg.export.text_height_mm)
+    for g in girders:
+        pts = [(float(x), float(y)) for x, y in g.points_world]
+        msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": GIRDER_LAYER})
+        if cfg.export.write_text:
+            cx = sum(p[0] for p in pts) / 4
+            cy = sum(p[1] for p in pts) / 4
+            msp.add_text(
+                f"G{g.id} {g.length_mm:.0f}x{g.width_mm:.0f}mm",
+                height=height,
+                dxfattribs={"layer": text_layer},
+            ).set_placement((cx, cy))
+
+
+def summarize_girders(girders) -> str:
+    if not girders:
+        return "거더: 검출 없음"
+    lines = ["거더 검출", "-" * 52]
+    for g in girders:
+        lines.append(
+            f"  G{g.id:<3} 폭 {g.width_mm:>7.0f} mm   길이 {g.length_mm:>8.0f} mm"
+            f"   지지밝기 {g.support:>3.0f}"
+        )
+    lines.append("-" * 52)
+    lines.append(f"  합계 {len(girders)} 개")
+    return "\n".join(lines)

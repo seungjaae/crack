@@ -52,6 +52,23 @@ class Analysis:
 
 
 @dataclass(frozen=True)
+class GirderCfg:
+    canny_lo: int = 25
+    canny_hi: int = 90
+    hough_threshold: int = 50
+    hough_min_len: int = 90
+    hough_max_gap: int = 22
+    angle_tol_deg: float = 6.0
+    chunks: int = 6
+    min_run_px: int = 12
+    width_pad_px: int = 5
+    support_brightness: float = 140.0
+    extent_brightness: float = 130.0
+    min_length_ratio: float = 0.15
+    trust_own_extent: float = 0.8
+
+
+@dataclass(frozen=True)
 class Export:
     dxf_version: str
     write_text: bool
@@ -69,6 +86,7 @@ class Config:
     vectorize: Vectorize
     export: Export
     analysis: Analysis
+    girder: GirderCfg
 
     def grade_for_color(self, color: str) -> Grade | None:
         for g in self.grades:
@@ -143,4 +161,6 @@ def load(path: str | Path | None = None) -> Config:
         vectorize=Vectorize(**raw["vectorize"]),
         export=Export(**raw["export"]),
         analysis=Analysis(length_bins_mm=tuple(bins), sort_by=sort_by),
+        # [girder] 도 없어도 기본값으로 동작한다
+        girder=GirderCfg(**raw.get("girder", {})),
     )
